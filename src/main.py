@@ -1,5 +1,7 @@
 import string
 import unicodedata
+import webbrowser
+from datetime import datetime
 
 # "def" define una funcion: nos ayuda a tener multiples funciones
 # que podemos usar despues en varias partes del codigo.
@@ -40,6 +42,25 @@ def cmd_quien_eres():
     return "Soy Casper, tu asistente personal"
 
 
+def cmd_hora():
+    # datetime.now() devuelve la fecha y hora actual del sistema.
+    # strftime la formatea: %H = hora (24h), %M = minutos.
+    ahora = datetime.now()
+    return "Son las " + ahora.strftime("%H:%M")
+
+
+def cmd_fecha():
+    # %A = dia de la semana, %d = dia, %m = mes, %Y = año.
+    hoy = datetime.now()
+    return "Hoy es " + hoy.strftime("%A %d/%m/%Y")
+
+
+def cmd_abrir_youtube():
+    # webbrowser abre una URL en el navegador predeterminado.
+    webbrowser.open("https://www.youtube.com")
+    return "Abriendo YouTube..."
+
+
 def cmd_salir():
     return "salir"
 
@@ -49,9 +70,15 @@ def cmd_salir():
 # estamos llamando, solo la estamos guardando).
 # En Python las funciones son objetos como cualquier otro y se pueden
 # guardar en un diccionario. A eso se le llama "funciones de primera clase".
+# Varias claves pueden apuntar a la misma funcion (son alias del comando).
 COMMANDS = {
     "hola": cmd_hola,
     "quien eres": cmd_quien_eres,
+    "hora": cmd_hora,
+    "que hora es": cmd_hora,
+    "fecha": cmd_fecha,
+    "que dia es": cmd_fecha,
+    "abrir youtube": cmd_abrir_youtube,
     "salir": cmd_salir,
 }
 
