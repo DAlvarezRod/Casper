@@ -29,16 +29,39 @@ def normalize_text(text):
     return text
 
 
+# Cada comando es una funcion que devuelve la respuesta de Casper.
+# Al ser funciones independientes, cada una se puede probar por separado.
+
+def cmd_hola():
+    return "Hola. ¿En que puedo ayudarte?"
+
+
+def cmd_quien_eres():
+    return "Soy Casper, tu asistente personal"
+
+
+def cmd_salir():
+    return "salir"
+
+
+# Registro de comandos: la clave es el texto normalizado que el usuario
+# escribe, y el valor es la FUNCION que lo atiende (sin parentesis: no la
+# estamos llamando, solo la estamos guardando).
+# En Python las funciones son objetos como cualquier otro y se pueden
+# guardar en un diccionario. A eso se le llama "funciones de primera clase".
+COMMANDS = {
+    "hola": cmd_hola,
+    "quien eres": cmd_quien_eres,
+    "salir": cmd_salir,
+}
+
+
 def process_message(message):
-    # return devuelve un valor a quien llamo la funcion.
-    if message == "salir":
-        return "salir"
-    elif message == "hola":
-        return "Hola. ¿En que puedo ayudarte?"
-    elif message == "quien eres":
-        return "Soy Casper, tu asistente personal"
-    else:
+    # .get() busca la clave en el diccionario y devuelve None si no existe.
+    handler = COMMANDS.get(message)
+    if handler is None:
         return "Todavia no se como responder a eso"
+    return handler()
 
 
 def main():
