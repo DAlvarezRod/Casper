@@ -84,11 +84,16 @@ COMMANDS = {
 
 
 def process_message(message):
-    # .get() busca la clave en el diccionario y devuelve None si no existe.
+    # 1. Coincidencia exacta: la forma mas rapida y segura.
     handler = COMMANDS.get(message)
-    if handler is None:
-        return "Todavia no se como responder a eso"
-    return handler()
+    if handler is not None:
+        return handler()
+    # 2. Coincidencia por prefijo: "que dia es hoy" empieza con "que dia es".
+    # Asi el usuario no tiene que adivinar la frase exacta del comando.
+    for command, func in COMMANDS.items():
+        if message.startswith(command):
+            return func()
+    return "Todavia no se como responder a eso"
 
 
 def main():
