@@ -8,10 +8,11 @@ import string
 import subprocess
 import threading
 import unicodedata
+import urllib.request
 import webbrowser
 from datetime import datetime
 from difflib import get_close_matches
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 
 import psutil
 from PIL import ImageGrab
@@ -69,6 +70,32 @@ def fuzzy_match(texto, opciones, umbral=0.8):
     # Asi "holaa" coincide con "hola", pero "xyz" no coincide con nada.
     parecidos = get_close_matches(texto, opciones, n=1, cutoff=umbral)
     return parecidos[0] if parecidos else None
+
+
+# Sinónimos y conjugaciones comunes del primer verbo. Se aplican SOLO a la
+# primera palabra para no alterar los argumentos: "nota eliminar duplicados"
+# conserva "eliminar" en el texto de la nota. Un sistema real usaría
+# lematización (NLP); esto es la versión honesta con diccionario.
+SINONIMOS = {
+    "eliminar": "borrar",
+    "quita": "borrar",
+    "apaga": "apagar",
+    "reinicia": "reiniciar",
+    "muestra": "ver",
+    "muestrame": "ver",
+    "abre": "abrir",
+}
+
+
+def aplicar_sinonimos(message):
+    primera, _, resto = message.partition(" ")
+    primera = SINONIMOS.get(primera, primera)
+    return primera + (" " + resto if resto else "")
+
+
+# Respuesta cuando nada coincide. En vez de solo decir "no sé", enseña
+# el camino: un buen asistente nunca deja al usuario sin siguiente paso.
+RESPUESTA_DESCONOCIDA = "Todavía no sé cómo responder a eso. Escribe 'ayuda' para ver lo que puedo hacer."
 
 
 # Cada comando es una funcion que devuelve la respuesta de Casper.
@@ -362,7 +389,8 @@ def cmd_ayuda():
         "Puedo ayudarte con:\n"
         "CONVERSACIÓN: hola, quien eres, chiste\n"
         "TIEMPO: hora, fecha, temporizador <minutos>\n"
-        "WEB: abrir <sitio>\n"
+        "RESUMEN: resumen, buenos dias\n"
+        "WEB: abrir <sitio>, wikipedia <tema>\n"
         "SISTEMA: estado del sistema, bateria, captura de pantalla, "
         "abrir app <nombre>, volumen <subir|bajar|silenciar>, bloquear, apagar, reiniciar, limpiar\n"
         "NOTAS: nota <texto>, ver notas, borrar nota <n>\n"
@@ -370,6 +398,49 @@ def cmd_ayuda():
         "MATEMÁTICAS Y AZAR: calcular <expresión>, dado, moneda, azar <min> <max>\n"
         "OTROS: donde esta la captura, ayuda, salir"
     )
+
+
+def cmd_resumen():
+    # El informe matutino de Jarvis: agrega fecha, tareas, notas y batería
+    # en un solo mensaje proactivo. La proactividad es no esperar a que
+    # te pregunten cada cosa por separado.
+    hoy = datetime.now()
+    dia = DIAS_ES[hoy.weekday()]
+    tareas = _cargar_json(TAREAS_PATH, [])
+    pendientes = [t for t in tareas if not t["hecha"]]
+    notas = _cargar_json(NOTAS_PATH, [])
+    lineas = [
+        f"Buenos días. Hoy es {dia} {hoy.strftime('%d/%m/%Y')}, son las {hoy.strftime('%H:%M')}.",
+        f"Tienes {len(pendientes)} tarea(s) pendiente(s).",
+        f"Tienes {len(notas)} nota(s) guardada(s).",
+    ]
+    bat = psutil.sensors_battery()
+    if bat is not None:
+        estado = "cargando" if bat.power_plugged else "descargando"
+        lineas.append(f"Batería al {bat.percent}% ({estado}).")
+    if pendientes:
+        lineas.append("Empieza por: " + pendientes[0]["texto"])
+    return "\n".join(lineas)
+
+
+def cmd_wikipedia(tema):
+    # Investigación sin dependencias externas: la API REST de Wikipedia
+    # devuelve JSON con urllib de la librería estándar.
+    if not tema:
+        return "¿Qué quieres buscar? Ejemplo: wikipedia agujeros negros"
+    url = "https://es.wikipedia.org/api/rest_v1/page/summary/" + quote(tema)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Casper/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            datos = json.load(r)
+    except Exception:
+        return f"No encontré nada sobre '{tema}' en Wikipedia."
+    if datos.get("type") == "disambiguation":
+        return f"'{tema}' tiene varios significados. Sé más específico."
+    resumen = datos.get("extract", "")
+    if not resumen:
+        return f"No encontré nada sobre '{tema}' en Wikipedia."
+    return resumen[:500] + ("..." if len(resumen) > 500 else "")
 
 
 # --- Notas y tareas (persistencia en archivos JSON) ---
@@ -457,6 +528,11 @@ SITES = {
     "github": "https://github.com",
     "google": "https://www.google.com",
     "netflix": "https://www.netflix.com",
+    "gmail": "https://mail.google.com",
+    "correo": "https://mail.google.com",
+    "whatsapp": "https://web.whatsapp.com",
+    "drive": "https://drive.google.com",
+    "classroom": "https://classroom.google.com",
 }
 
 
@@ -512,6 +588,9 @@ COMMANDS = {
     "limpiar": cmd_limpiar,
     "limpia la pantalla": cmd_limpiar,
     "ayuda": cmd_ayuda,
+    "resumen": cmd_resumen,
+    "buenos dias": cmd_resumen,
+    "resumen del dia": cmd_resumen,
     "ver notas": cmd_ver_notas,
     "mis notas": cmd_ver_notas,
     "ver tareas": cmd_ver_tareas,
@@ -533,6 +612,7 @@ ARG_COMMANDS = {
     "tarea": cmd_tarea,
     "completar tarea": cmd_completar_tarea,
     "temporizador": cmd_temporizador,
+    "wikipedia": cmd_wikipedia,
 }
 
 
@@ -546,6 +626,8 @@ def _extraer_comando_arg(message):
 
 
 def process_message(message):
+    # 0. Sinónimos: "eliminar nota 1" -> "borrar nota 1" antes de buscar.
+    message = aplicar_sinonimos(message)
     # 1. Coincidencia exacta: la forma mas rapida y segura.
     handler = COMMANDS.get(message)
     if handler is not None:
@@ -574,7 +656,7 @@ def process_message(message):
     parecido = fuzzy_match(message, COMMANDS.keys())
     if parecido is not None:
         return COMMANDS[parecido]()
-    return "Todavia no se como responder a eso"
+    return RESPUESTA_DESCONOCIDA
 
 
 def main():
