@@ -36,3 +36,16 @@ Casper v1 no:
 - Python
 - Git
 - GitHub
+
+## Cómo ejecutar
+
+```bash
+python src/main.py
+```
+
+## Cómo correr las pruebas
+
+```bash
+pip install -r requirements.txt
+python -m pytest
+```
