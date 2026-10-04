@@ -334,15 +334,51 @@ def test_dispatch_calcular_y_nota(monkeypatch, tmp_path):
     assert "probar dispatch" in main.process_message("ver notas")
 
 
-# --- Sinónimos, resumen, Wikipedia ---
+# --- Normalización máxima: tokens, muletillas, números en palabras ---
 
-def test_aplicar_sinonimos():
-    assert main.aplicar_sinonimos("eliminar nota 1") == "borrar nota 1"
-    assert main.aplicar_sinonimos("abre youtube") == "abrir youtube"
-    assert main.aplicar_sinonimos("apaga el equipo") == "apagar el equipo"
-    # Solo la primera palabra cambia: los argumentos se conservan intactos.
-    assert main.aplicar_sinonimos("nota eliminar duplicados") == "nota eliminar duplicados"
-    assert main.aplicar_sinonimos("hola") == "hola"
+def test_tokenizar():
+    assert main.tokenizar(main.normalize_text("por favor dime qué hora es")) == ["dime", "hora"]
+    assert main.tokenizar(main.normalize_text("quiero ver mis notas")) == ["ver", "nota"]
+    # "si" y "no" nunca son muletillas: son comandos sensibles.
+    assert main.tokenizar("si") == ["si"]
+    assert main.tokenizar("no") == ["no"]
+
+
+def test_normalize_letras_repetidas_y_numeros_pegados():
+    assert main.normalize_text("holaaaa") == "hola"
+    assert main.normalize_text("temporizador1") == "temporizador 1"
+    # Pero los números con ceros repetidos no se tocan.
+    assert main.normalize_text("1000") == "1000"
+
+
+def test_prefijo_respeta_limite_de_palabra():
+    # "simple" empieza con "si", pero NO debe disparar la confirmación.
+    assert main.process_message("simple") == main.RESPUESTA_DESCONOCIDA
+    assert main.process_message("sistema") == main.RESPUESTA_DESCONOCIDA
+
+
+def test_tokens_ignoran_orden_y_muletillas():
+    assert main.process_message("por favor dime qué hora es").startswith("Son las")
+    assert "notas" in main.process_message("quiero ver mis notas").lower()
+    # "holaaaa" se normaliza a "hola" antes de buscar (flujo real de main()).
+    assert main.process_message(main.normalize_text("holaaaa")) == "Hola. ¿En que puedo ayudarte?"
+
+
+def test_tokens_con_sinonimos_y_numeros(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    main.cmd_nota("nota uno")
+    main.cmd_nota("nota dos")
+    # Sinónimo + número en palabras + orden alterado.
+    assert "Nota borrada" in main.process_message("por favor elimina la primera nota")
+    assert "nota dos" in main.cmd_ver_notas()
+    assert "nota uno" not in main.cmd_ver_notas()
+
+
+def test_abrir_limpia_muletillas(monkeypatch):
+    opened = []
+    monkeypatch.setattr(main.webbrowser, "open", lambda url: opened.append(url))
+    assert main.process_message("abrir el whatsapp por favor") == "Abriendo whatsapp..."
+    assert opened == ["https://web.whatsapp.com"]
 
 
 def test_sinonimo_en_dispatch(monkeypatch, tmp_path):
