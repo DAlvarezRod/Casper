@@ -120,9 +120,32 @@ def tokenizar(message):
         if not palabra or palabra in STOPWORDS:
             continue
         palabra = NUMEROS.get(palabra, palabra)
-        palabra = SINONIMOS.get(palabra, palabra)
+        if palabra in SINONIMOS:
+            palabra = SINONIMOS[palabra]
+        elif palabra not in _vocabulario():
+            # Typo por palabra: "elmina" -> "elimina". Solo si es muy
+            # parecido (>=0.8); si no, se deja como está.
+            corregida = fuzzy_match(palabra, _vocabulario())
+            if corregida is not None:
+                palabra = SINONIMOS.get(corregida, corregida)
         tokens.append(palabra)
     return tokens
+
+
+# Vocabulario para corregir typos por palabra: todo lo que Casper conoce
+# (comandos, inicios de comandos con argumento y sinónimos). Se construye
+# una sola vez porque no cambia durante la ejecución.
+_VOCABULARIO = None
+
+
+def _vocabulario():
+    global _VOCABULARIO
+    if _VOCABULARIO is None:
+        palabras = set(SINONIMOS.keys()) | set(SINONIMOS.values())
+        for cmd in list(COMMANDS) + list(ARG_COMMANDS):
+            palabras.update(cmd.split())
+        _VOCABULARIO = palabras - STOPWORDS
+    return _VOCABULARIO
 
 
 def puntaje_tokens(tokens_msg, tokens_cmd):
@@ -646,9 +669,7 @@ COMMANDS = {
     "buenos dias": cmd_resumen,
     "resumen del dia": cmd_resumen,
     "ver notas": cmd_ver_notas,
-    "mis notas": cmd_ver_notas,
     "ver tareas": cmd_ver_tareas,
-    "mis tareas": cmd_ver_tareas,
     "salir": cmd_salir,
 }
 
@@ -679,7 +700,18 @@ def _extraer_comando_arg(message):
     return None, None
 
 
+# Frases completas que se reescriben antes de buscar. Para casos donde
+# quitar muletillas destruiría el significado: "mis notas" -> [nota]
+# coincidiría con "agregar nota" en vez de con "ver notas".
+FRASES = {
+    "mis notas": "ver notas",
+    "mis tareas": "ver tareas",
+}
+
+
 def process_message(message):
+    # 0. Reescritura de frases completas (ver FRASES).
+    message = FRASES.get(message, message)
     # 1. Coincidencia exacta: la forma mas rapida y segura.
     handler = COMMANDS.get(message)
     if handler is not None:
