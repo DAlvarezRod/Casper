@@ -1,7 +1,12 @@
+import ast
 import ctypes
+import json
+import operator
 import os
+import random
 import string
 import subprocess
+import threading
 import unicodedata
 import webbrowser
 from datetime import datetime
@@ -17,6 +22,12 @@ try:
     import pyautogui
 except Exception:
     pyautogui = None
+
+try:
+    # winsound solo existe en Windows; se usa para el temporizador.
+    import winsound
+except ImportError:
+    winsound = None
 
 # "def" define una funcion: nos ayuda a tener multiples funciones
 # que podemos usar despues en varias partes del codigo.
@@ -40,8 +51,12 @@ def normalize_text(text):
     # Quitamos los acentos ANTES de comparar con los comandos,
     # asi "Quien eres?" coincide con "quien eres".
     text = strip_accents(text)
-    punctuation = string.punctuation + "¿¡"
-    table = str.maketrans("", "", punctuation)
+    # Estos caracteres se CONSERVAN porque tienen significado para comandos
+    # como "calcular": en "calcular 3.5 * 2" el punto y el asterisco no son
+    # decoración, son parte del mensaje. Todo lo demás se elimina.
+    significativos = "+-*/%().,"
+    borrar = "".join(c for c in string.punctuation + "¿¡" if c not in significativos)
+    table = str.maketrans("", "", borrar)
     text = text.translate(table)
     return text
 
@@ -139,6 +154,10 @@ APPS = {
     "bloc de notas": "notepad.exe",
     "calculadora": "calc.exe",
     "paint": "mspaint.exe",
+    "explorador": "explorer.exe",
+    "cmd": "cmd.exe",
+    "terminal": "cmd.exe",
+    "powershell": "powershell.exe",
 }
 
 
@@ -225,6 +244,213 @@ def cmd_reiniciar():
     return pedir_confirmacion("reiniciar el equipo", _reiniciar_ahora)
 
 
+# --- Diversión y utilidades ---
+
+CHISTES = [
+    "¿Por qué los pájaros no usan Facebook? Porque ya tienen Twitter.",
+    "¿Qué hace una abeja en el gimnasio? ¡Zum-ba!",
+    "¿Por qué el libro de matemáticas estaba triste? Porque tenía demasiados problemas.",
+    "¿Cómo se llama el campeón de buceo japonés? Tokofondo.",
+    "¿Qué le dice un bit al otro? Nos vemos en el bus.",
+    "¿Por qué los programadores confunden Halloween con Navidad? Porque OCT 31 == DEC 25.",
+    "¿Cómo se despiden los químicos? Ácido un placer.",
+    "¿Qué hace un pez? ¡Nada!",
+]
+
+
+def cmd_chiste():
+    return random.choice(CHISTES)
+
+
+# Operadores permitidos en la calculadora. Todo lo demás (llamadas a
+# funciones, atributos, imports) está prohibido por _evaluar.
+_OPERADORES = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.Mod: operator.mod,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+def _evaluar(nodo):
+    # Recorre el árbol sintáctico de la expresión y solo permite números
+    # y operadores básicos. Cualquier otra cosa lanza ValueError.
+    if isinstance(nodo, ast.Expression):
+        return _evaluar(nodo.body)
+    if isinstance(nodo, ast.Constant) and isinstance(nodo.value, (int, float)):
+        return nodo.value
+    if isinstance(nodo, ast.BinOp) and type(nodo.op) in _OPERADORES:
+        return _OPERADORES[type(nodo.op)](_evaluar(nodo.left), _evaluar(nodo.right))
+    if isinstance(nodo, ast.UnaryOp) and type(nodo.op) in _OPERADORES:
+        return _OPERADORES[type(nodo.op)](_evaluar(nodo.operand))
+    raise ValueError("Expresión no permitida")
+
+
+def cmd_calcular(expresion):
+    # NUNCA usar eval() con texto del usuario: ejecutaría cualquier código,
+    # como borrar archivos. En su lugar parseamos con ast y solo aceptamos
+    # números y operadores de la lista blanca _OPERADORES.
+    if not expresion:
+        return "¿Qué quieres calcular? Ejemplo: calcular 15 * 3 + 2"
+    expresion = expresion.replace(",", ".")  # coma decimal española -> punto
+    try:
+        arbol = ast.parse(expresion, mode="eval")
+        return str(_evaluar(arbol))
+    except ZeroDivisionError:
+        return "No puedo dividir por cero."
+    except Exception:
+        return "Solo puedo calcular números y operaciones básicas (+, -, *, /, **, %)."
+
+
+def cmd_dado():
+    return f"El dado dice: {random.randint(1, 6)}"
+
+
+def cmd_moneda():
+    return f"Salió: {random.choice(['cara', 'sello'])}"
+
+
+def cmd_azar(rango):
+    partes = rango.split()
+    try:
+        minimo, maximo = int(partes[0]), int(partes[1])
+    except (IndexError, ValueError):
+        return "Uso: azar <mínimo> <máximo>. Ejemplo: azar 1 100"
+    if minimo > maximo:
+        return "El mínimo no puede ser mayor que el máximo."
+    return f"Número al azar: {random.randint(minimo, maximo)}"
+
+
+def cmd_bateria():
+    bat = psutil.sensors_battery()
+    if bat is None:
+        return "No detecté batería (¿equipo de escritorio?)."
+    estado = "cargando" if bat.power_plugged else "descargando"
+    return f"Batería: {bat.percent}% ({estado})"
+
+
+def cmd_limpiar():
+    os.system("cls" if os.name == "nt" else "clear")
+    return ""  # main() no imprime respuestas vacías
+
+
+def cmd_temporizador(minutos):
+    try:
+        mins = float(minutos.replace(",", "."))
+        if mins <= 0:
+            raise ValueError
+    except ValueError:
+        return "Uso: temporizador <minutos>. Ejemplo: temporizador 5"
+
+    def _avisar():
+        if winsound is not None:
+            winsound.Beep(880, 500)
+        # Ojo: esto se imprime desde otro hilo, puede mezclarse con el
+        # prompt. Es la forma simple; la robusta sería una cola de mensajes.
+        print("\nCasper: ¡Tiempo cumplido!")
+
+    threading.Timer(mins * 60, _avisar).start()
+    return f"Temporizador de {minutos} minutos iniciado."
+
+
+def cmd_ayuda():
+    return (
+        "Puedo ayudarte con:\n"
+        "CONVERSACIÓN: hola, quien eres, chiste\n"
+        "TIEMPO: hora, fecha, temporizador <minutos>\n"
+        "WEB: abrir <sitio>\n"
+        "SISTEMA: estado del sistema, bateria, captura de pantalla, "
+        "abrir app <nombre>, volumen <subir|bajar|silenciar>, bloquear, apagar, reiniciar, limpiar\n"
+        "NOTAS: nota <texto>, ver notas, borrar nota <n>\n"
+        "TAREAS: tarea <texto>, ver tareas, completar tarea <n>\n"
+        "MATEMÁTICAS Y AZAR: calcular <expresión>, dado, moneda, azar <min> <max>\n"
+        "OTROS: donde esta la captura, ayuda, salir"
+    )
+
+
+# --- Notas y tareas (persistencia en archivos JSON) ---
+
+NOTAS_PATH = "notas.json"
+TAREAS_PATH = "tareas.json"
+
+
+def _cargar_json(ruta, defecto):
+    # Lee un archivo JSON. Si no existe o está corrupto, devuelve el valor
+    # por defecto en vez de romper el programa.
+    try:
+        with open(ruta, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return defecto
+
+
+def _guardar_json(ruta, datos):
+    with open(ruta, "w", encoding="utf-8") as f:
+        json.dump(datos, f, ensure_ascii=False, indent=2)
+
+
+def cmd_nota(texto):
+    if not texto:
+        return "¿Qué quieres anotar? Ejemplo: nota comprar leche"
+    notas = _cargar_json(NOTAS_PATH, [])
+    notas.append({"texto": texto, "fecha": datetime.now().strftime("%d/%m/%Y %H:%M")})
+    _guardar_json(NOTAS_PATH, notas)
+    return f"Nota {len(notas)} guardada."
+
+
+def cmd_ver_notas():
+    notas = _cargar_json(NOTAS_PATH, [])
+    if not notas:
+        return "No tienes notas guardadas."
+    lineas = [f"{i + 1}. {n['texto']} ({n['fecha']})" for i, n in enumerate(notas)]
+    return "\n".join(lineas)
+
+
+def cmd_borrar_nota(numero):
+    notas = _cargar_json(NOTAS_PATH, [])
+    try:
+        borrada = notas.pop(int(numero) - 1)
+    except (ValueError, IndexError):
+        return "Uso: borrar nota <número>. Mira tus notas con 'ver notas'."
+    _guardar_json(NOTAS_PATH, notas)
+    return f"Nota borrada: {borrada['texto']}"
+
+
+def cmd_tarea(texto):
+    if not texto:
+        return "¿Qué tarea quieres agregar? Ejemplo: tarea estudiar para el parcial"
+    tareas = _cargar_json(TAREAS_PATH, [])
+    tareas.append({"texto": texto, "hecha": False})
+    _guardar_json(TAREAS_PATH, tareas)
+    return f"Tarea {len(tareas)} agregada."
+
+
+def cmd_ver_tareas():
+    tareas = _cargar_json(TAREAS_PATH, [])
+    if not tareas:
+        return "No tienes tareas pendientes. ¡Bien!"
+    lineas = []
+    for i, t in enumerate(tareas):
+        marca = "x" if t["hecha"] else " "
+        lineas.append(f"{i + 1}. [{marca}] {t['texto']}")
+    return "\n".join(lineas)
+
+
+def cmd_completar_tarea(numero):
+    tareas = _cargar_json(TAREAS_PATH, [])
+    try:
+        tarea = tareas[int(numero) - 1]
+    except (ValueError, IndexError):
+        return "Uso: completar tarea <número>. Mira tus tareas con 'ver tareas'."
+    tarea["hecha"] = True
+    _guardar_json(TAREAS_PATH, tareas)
+    return f"Tarea completada: {tarea['texto']}"
+
+
 # Tabla de sitios conocidos: nombre corto -> URL.
 SITES = {
     "youtube": "https://www.youtube.com",
@@ -275,6 +501,21 @@ COMMANDS = {
     "reiniciar equipo": cmd_reiniciar,
     "si": cmd_si,
     "no": cmd_no,
+    "chiste": cmd_chiste,
+    "dime un chiste": cmd_chiste,
+    "cuentame un chiste": cmd_chiste,
+    "dado": cmd_dado,
+    "tira el dado": cmd_dado,
+    "moneda": cmd_moneda,
+    "cara o sello": cmd_moneda,
+    "bateria": cmd_bateria,
+    "limpiar": cmd_limpiar,
+    "limpia la pantalla": cmd_limpiar,
+    "ayuda": cmd_ayuda,
+    "ver notas": cmd_ver_notas,
+    "mis notas": cmd_ver_notas,
+    "ver tareas": cmd_ver_tareas,
+    "mis tareas": cmd_ver_tareas,
     "salir": cmd_salir,
 }
 
@@ -285,6 +526,13 @@ ARG_COMMANDS = {
     "abrir": cmd_abrir,
     "abrir app": cmd_abrir_app,
     "volumen": cmd_volumen,
+    "calcular": cmd_calcular,
+    "azar": cmd_azar,
+    "nota": cmd_nota,
+    "borrar nota": cmd_borrar_nota,
+    "tarea": cmd_tarea,
+    "completar tarea": cmd_completar_tarea,
+    "temporizador": cmd_temporizador,
 }
 
 
@@ -342,7 +590,9 @@ def main():
             print("Casper: Hasta luego.")
             break
 
-        print("Casper:", response)
+        # Las respuestas vacías (como la de "limpiar") no se imprimen.
+        if response:
+            print("Casper:", response)
 
 
 if __name__ == "__main__":
