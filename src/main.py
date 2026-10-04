@@ -82,7 +82,7 @@ def fuzzy_match(texto, opciones, umbral=0.8):
 # Palabras de relleno que no aportan significado al comando.
 # Ojo: "si" y "no" NO están aquí porque son comandos que cambian estado.
 STOPWORDS = {
-    "por", "favor", "me", "puedes", "podrias", "quiero", "quisiera", "deseo",
+    "por", "favor", "porfavor", "porfa", "me", "puedes", "podrias", "quiero", "quisiera", "deseo",
     "el", "la", "los", "las", "de", "del", "al", "un", "una", "unos", "unas",
     "que", "en", "mi", "mis", "tu", "tus", "su", "sus", "se", "es", "son",
     "esta", "este", "esto", "estos", "con", "para", "como", "muy",
