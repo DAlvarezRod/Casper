@@ -438,3 +438,23 @@ def test_sites_nuevos(monkeypatch):
 def test_ayuda_menciona_nuevo():
     ayuda = main.cmd_ayuda()
     assert "resumen" in ayuda and "wikipedia" in ayuda
+
+
+def test_typo_por_palabra():
+    # "elmina" no existe, pero se corrige a "elimina" -> "borrar".
+    tokens = main.tokenizar(main.normalize_text("porfavor elmina la segunda nota"))
+    assert tokens == ["borrar", "2", "nota"]
+
+
+def test_typo_por_palabra_en_dispatch(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    main.cmd_nota("nota uno")
+    main.cmd_nota("nota dos")
+    assert "Nota borrada: nota dos" in main.process_message("porfavor elmina la segunda nota")
+    assert "nota dos" not in main.cmd_ver_notas()
+
+
+def test_frases_reescritas():
+    # "mis notas" se reduce a [nota]; sin FRASES caería en "agregar nota".
+    assert main.process_message("mis notas") == main.cmd_ver_notas()
+    assert main.process_message("mis tareas") == main.cmd_ver_tareas()
