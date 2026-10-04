@@ -73,3 +73,33 @@ def test_process_message_with_argument(monkeypatch):
     monkeypatch.setattr(main.webbrowser, "open", lambda url: opened.append(url))
     assert main.process_message("abrir github") == "Abriendo github..."
     assert opened == ["https://github.com"]
+
+
+def test_cmd_fecha_en_espanol():
+    # El dia debe salir en español sin importar el idioma del sistema.
+    from datetime import datetime
+    esperado = main.DIAS_ES[datetime.now().weekday()]
+    respuesta = main.cmd_fecha()
+    assert esperado in respuesta
+    assert respuesta.startswith("Hoy es ")
+
+
+def test_fuzzy_match_typos():
+    # Typos comunes deben resolverse al comando correcto.
+    assert main.process_message("holaa") == "Hola. ¿En que puedo ayudarte?"
+    assert main.process_message("ola") == "Hola. ¿En que puedo ayudarte?"
+    assert main.process_message("que ora es").startswith("Son las")
+
+
+def test_fuzzy_match_rejects_gibberish():
+    # Texto sin parecido a ningun comando sigue siendo desconocido.
+    assert main.process_message("xyz") == "Todavia no se como responder a eso"
+    assert main.process_message("qwerty") == "Todavia no se como responder a eso"
+
+
+def test_fuzzy_match_arg_command(monkeypatch):
+    # Typos en la primera palabra de un comando con argumento tambien funcionan.
+    opened = []
+    monkeypatch.setattr(main.webbrowser, "open", lambda url: opened.append(url))
+    assert main.process_message("avrir youtube") == "Abriendo youtube..."
+    assert opened == ["https://www.youtube.com"]
