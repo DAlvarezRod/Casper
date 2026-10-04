@@ -48,10 +48,28 @@ def test_cmd_hora_format():
     assert re.fullmatch(r"Son las \d{2}:\d{2}", main.cmd_hora())
 
 
-def test_cmd_abrir_youtube(monkeypatch):
+def test_cmd_abrir_known_site(monkeypatch):
     # monkeypatch reemplaza webbrowser.open por una función falsa,
     # así la prueba no abre un navegador de verdad.
     opened = []
     monkeypatch.setattr(main.webbrowser, "open", lambda url: opened.append(url))
-    assert main.cmd_abrir_youtube() == "Abriendo YouTube..."
+    assert main.cmd_abrir("youtube") == "Abriendo youtube..."
     assert opened == ["https://www.youtube.com"]
+
+
+def test_cmd_abrir_unknown_site_uses_google(monkeypatch):
+    opened = []
+    monkeypatch.setattr(main.webbrowser, "open", lambda url: opened.append(url))
+    assert main.cmd_abrir("stack overflow") == "Abriendo stack overflow..."
+    assert opened == ["https://www.google.com/search?q=stack+overflow"]
+
+
+def test_cmd_abrir_without_argument():
+    assert main.cmd_abrir("") == "¿Qué sitio quieres que abra?"
+
+
+def test_process_message_with_argument(monkeypatch):
+    opened = []
+    monkeypatch.setattr(main.webbrowser, "open", lambda url: opened.append(url))
+    assert main.process_message("abrir github") == "Abriendo github..."
+    assert opened == ["https://github.com"]
