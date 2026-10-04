@@ -2,6 +2,7 @@ import string
 import unicodedata
 import webbrowser
 from datetime import datetime
+from difflib import get_close_matches
 from urllib.parse import quote_plus
 
 # "def" define una funcion: nos ayuda a tener multiples funciones
@@ -32,6 +33,16 @@ def normalize_text(text):
     return text
 
 
+def fuzzy_match(texto, opciones, umbral=0.8):
+    # get_close_matches compara texto con cada opcion y devuelve las
+    # mas parecidas, ordenadas de mejor a peor.
+    # n=1: solo nos interesa la mejor candidata.
+    # cutoff=umbral: que tan parecida debe ser (0.8 = 80% similar).
+    # Asi "holaa" coincide con "hola", pero "xyz" no coincide con nada.
+    parecidos = get_close_matches(texto, opciones, n=1, cutoff=umbral)
+    return parecidos[0] if parecidos else None
+
+
 # Cada comando es una funcion que devuelve la respuesta de Casper.
 # Al ser funciones independientes, cada una se puede probar por separado.
 
@@ -50,10 +61,19 @@ def cmd_hora():
     return "Son las " + ahora.strftime("%H:%M")
 
 
+# Dias de la semana en español. weekday() devuelve un numero del 0 (lunes)
+# al 6 (domingo), sin depender del idioma del sistema operativo.
+# Asi la respuesta siempre sale en español, en cualquier computador.
+DIAS_ES = ["lunes", "martes", "miercoles", "jueves",
+           "viernes", "sabado", "domingo"]
+
+
 def cmd_fecha():
-    # %A = dia de la semana, %d = dia, %m = mes, %Y = año.
     hoy = datetime.now()
-    return "Hoy es " + hoy.strftime("%A %d/%m/%Y")
+    dia = DIAS_ES[hoy.weekday()]
+    # f-string: la f antes de las comillas permite meter {variables}
+    # directamente dentro del texto. Equivale a concatenar con +.
+    return f"Hoy es {dia} {hoy.strftime('%d/%m/%Y')}"
 
 
 def cmd_salir():
@@ -114,15 +134,21 @@ def process_message(message):
         return handler()
     # 2. Comandos con argumento: separamos la intencion ("abrir")
     # del argumento ("youtube") y se lo pasamos a la funcion.
-    for command, func in ARG_COMMANDS.items():
-        if message == command or message.startswith(command + " "):
-            argumento = message[len(command):].strip()
-            return func(argumento)
+    # La primera palabra tambien acepta typos: "avrir youtube" funciona.
+    primera, _, resto = message.partition(" ")
+    comando_arg = primera if primera in ARG_COMMANDS else fuzzy_match(primera, ARG_COMMANDS.keys())
+    if comando_arg is not None:
+        return ARG_COMMANDS[comando_arg](resto.strip())
     # 3. Coincidencia por prefijo: "que dia es hoy" empieza con "que dia es".
     # Asi el usuario no tiene que adivinar la frase exacta del comando.
     for command, func in COMMANDS.items():
         if message.startswith(command):
             return func()
+    # 4. Coincidencia difusa: si nada anterior funciono, buscamos el comando
+    # mas parecido. "holaa" -> "hola", pero "xyz" no coincide con nada.
+    parecido = fuzzy_match(message, COMMANDS.keys())
+    if parecido is not None:
+        return COMMANDS[parecido]()
     return "Todavia no se como responder a eso"
 
 
