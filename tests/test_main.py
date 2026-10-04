@@ -458,3 +458,85 @@ def test_frases_reescritas():
     # "mis notas" se reduce a [nota]; sin FRASES caería en "agregar nota".
     assert main.process_message("mis notas") == main.cmd_ver_notas()
     assert main.process_message("mis tareas") == main.cmd_ver_tareas()
+
+
+# --- Fase 3 (cierre): recordatorios ---
+
+def test_cmd_recordar_minutos(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    timers = []
+    class FakeTimer:
+        def __init__(self, s, f): timers.append((s, f))
+        def start(self): pass
+    monkeypatch.setattr(main.threading, "Timer", FakeTimer)
+    r = main.process_message("recuerdame llamar al banco en 30 minutos")
+    assert "30 minuto(s)" in r and "llamar al banco" in r
+    assert timers and abs(timers[0][0] - 1800) < 5
+    import json
+    with open("recordatorios.json", encoding="utf-8") as f:
+        assert json.load(f)[0]["texto"] == "llamar al banco"
+
+
+def test_cmd_recordar_horas(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    timers = []
+    class FakeTimer:
+        def __init__(self, s, f): timers.append(s)
+        def start(self): pass
+    monkeypatch.setattr(main.threading, "Timer", FakeTimer)
+    assert "2 hora(s)" in main.process_message("recuerdame regar plantas en 2 horas")
+    assert abs(timers[0] - 7200) < 5
+
+
+def test_cmd_recordar_invalido(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert "Uso" in main.cmd_recordar("llamar sin tiempo")
+    assert "Uso" in main.cmd_recordar("")
+    assert "Qué quieres que te recuerde" in main.cmd_recordar("en 10 minutos")
+
+
+def test_ver_y_cancelar_recordatorios(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert main.cmd_ver_recordatorios() == "No tienes recordatorios pendientes."
+    timers = []
+    class FakeTimer:
+        def __init__(self, s, f): pass
+        def start(self): pass
+    monkeypatch.setattr(main.threading, "Timer", FakeTimer)
+    main.process_message("recuerdame primero en 10 minutos")
+    main.process_message("recuerdame segundo en 20 minutos")
+    assert "primero" in main.cmd_ver_recordatorios()
+    assert "cancelado" in main.cmd_cancelar_recordatorio("1").lower()
+    assert "primero" not in main.cmd_ver_recordatorios()
+    assert "Uso" in main.cmd_cancelar_recordatorio("99")
+
+
+def test_disparar_recordatorio_limpia(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    recs = [{"id": 1, "texto": "aviso", "timestamp": 9999999999}]
+    main._guardar_json(main.RECORDATORIOS_PATH, recs)
+    main._disparar_recordatorio(1)
+    assert "¡Recordatorio! aviso" in capsys.readouterr().out
+    assert main._cargar_json(main.RECORDATORIOS_PATH, []) == []
+    # Cancelado antes de sonar: no hace nada.
+    main._disparar_recordatorio(1)
+    assert capsys.readouterr().out == ""
+
+
+def test_reprogramar_anuncia_vencidos(monkeypatch, tmp_path, capsys):
+    import time
+    monkeypatch.chdir(tmp_path)
+    timers = []
+    class FakeTimer:
+        def __init__(self, s, f): timers.append(s)
+        def start(self): pass
+    monkeypatch.setattr(main.threading, "Timer", FakeTimer)
+    main._guardar_json(main.RECORDATORIOS_PATH, [
+        {"id": 1, "texto": "vencido", "timestamp": time.time() - 60},
+        {"id": 2, "texto": "futuro", "timestamp": time.time() + 600},
+    ])
+    main._reprogramar_recordatorios()
+    out = capsys.readouterr().out
+    assert "Mientras estabas fuera" in out and "vencido" in out
+    assert len(timers) == 1  # solo el futuro se reprogramó
+    assert [r["id"] for r in main._cargar_json(main.RECORDATORIOS_PATH, [])] == [2]
