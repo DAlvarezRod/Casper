@@ -194,3 +194,24 @@ def test_dispatch_abrir_sitio_sigue_funcionando(monkeypatch):
     monkeypatch.setattr(main.webbrowser, "open", lambda url: opened.append(url))
     assert main.process_message("abrir youtube") == "Abriendo youtube..."
     assert opened == ["https://www.youtube.com"]
+
+
+def test_captura_recuerda_ruta(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    monkeypatch.chdir(tmp_path)
+    main._ultima_captura["ruta"] = None
+    fake_imagen = SimpleNamespace(save=lambda ruta: None)
+    monkeypatch.setattr(main.ImageGrab, "grab", lambda: fake_imagen)
+    respuesta = main.cmd_captura()
+    ruta = main._ultima_captura["ruta"]
+    assert ruta is not None and os.path.isabs(ruta)
+    assert ruta in respuesta
+
+
+def test_donde_captura():
+    main._ultima_captura["ruta"] = None
+    assert "ninguna captura" in main.cmd_donde_captura()
+    main._ultima_captura["ruta"] = "/tmp/captura_x.png"
+    assert "/tmp/captura_x.png" in main.cmd_donde_captura()
+    # La frase exacta del usuario también debe funcionar (vía fuzzy matching)
+    assert "/tmp/captura_x.png" in main.process_message("donde guardaste esa captura")
