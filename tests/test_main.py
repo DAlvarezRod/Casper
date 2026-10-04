@@ -41,7 +41,7 @@ def test_process_message_prefix():
 
 def test_process_message_unknown():
     # "dime un chiste" ahora SÍ es un comando; usamos otra frase desconocida.
-    assert main.process_message("dime un poema") == "Todavia no se como responder a eso"
+    assert main.process_message("dime un poema") == main.RESPUESTA_DESCONOCIDA
 
 
 def test_cmd_hora_format():
@@ -94,8 +94,8 @@ def test_fuzzy_match_typos():
 
 def test_fuzzy_match_rejects_gibberish():
     # Texto sin parecido a ningun comando sigue siendo desconocido.
-    assert main.process_message("xyz") == "Todavia no se como responder a eso"
-    assert main.process_message("qwerty") == "Todavia no se como responder a eso"
+    assert main.process_message("xyz") == main.RESPUESTA_DESCONOCIDA
+    assert main.process_message("qwerty") == main.RESPUESTA_DESCONOCIDA
 
 
 def test_fuzzy_match_arg_command(monkeypatch):
@@ -332,3 +332,73 @@ def test_dispatch_calcular_y_nota(monkeypatch, tmp_path):
     assert main.process_message("calcular 6 * 7") == "42"
     assert main.process_message("nota probar dispatch") == "Nota 1 guardada."
     assert "probar dispatch" in main.process_message("ver notas")
+
+
+# --- Sinónimos, resumen, Wikipedia ---
+
+def test_aplicar_sinonimos():
+    assert main.aplicar_sinonimos("eliminar nota 1") == "borrar nota 1"
+    assert main.aplicar_sinonimos("abre youtube") == "abrir youtube"
+    assert main.aplicar_sinonimos("apaga el equipo") == "apagar el equipo"
+    # Solo la primera palabra cambia: los argumentos se conservan intactos.
+    assert main.aplicar_sinonimos("nota eliminar duplicados") == "nota eliminar duplicados"
+    assert main.aplicar_sinonimos("hola") == "hola"
+
+
+def test_sinonimo_en_dispatch(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    main.cmd_nota("nota para eliminar")
+    # "eliminar" no existe como comando, pero el sinónimo lo resuelve.
+    assert "Nota borrada" in main.process_message("eliminar nota 1")
+    assert main.cmd_ver_notas() == "No tienes notas guardadas."
+
+
+def test_respuesta_desconocida_sugiere_ayuda():
+    assert "ayuda" in main.RESPUESTA_DESCONOCIDA
+    assert main.process_message("dime un poema") == main.RESPUESTA_DESCONOCIDA
+
+
+def test_cmd_resumen(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main.psutil, "sensors_battery",
+                        lambda: SimpleNamespace(percent=80, power_plugged=False))
+    main.cmd_tarea("estudiar redes")
+    main.cmd_nota("recordatorio")
+    resumen = main.cmd_resumen()
+    assert "Buenos días" in resumen
+    assert "1 tarea(s) pendiente(s)" in resumen
+    assert "1 nota(s)" in resumen
+    assert "80%" in resumen
+    assert "estudiar redes" in resumen
+
+
+def test_cmd_wikipedia_ok(monkeypatch):
+    import json
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps({"extract": "Python es un lenguaje de programación."}).encode()
+    monkeypatch.setattr(main.urllib.request, "urlopen", lambda req, timeout=10: FakeResp())
+    assert main.cmd_wikipedia("python") == "Python es un lenguaje de programación."
+    assert main.cmd_wikipedia("") == "¿Qué quieres buscar? Ejemplo: wikipedia agujeros negros"
+
+
+def test_cmd_wikipedia_falla_con_gracia(monkeypatch):
+    def _boom(req, timeout=10):
+        raise Exception("sin internet")
+    monkeypatch.setattr(main.urllib.request, "urlopen", _boom)
+    assert "No encontré nada" in main.cmd_wikipedia("xyz123")
+
+
+def test_sites_nuevos(monkeypatch):
+    opened = []
+    monkeypatch.setattr(main.webbrowser, "open", lambda url: opened.append(url))
+    assert main.process_message("abrir gmail") == "Abriendo gmail..."
+    assert opened == ["https://mail.google.com"]
+
+
+def test_ayuda_menciona_nuevo():
+    ayuda = main.cmd_ayuda()
+    assert "resumen" in ayuda and "wikipedia" in ayuda
