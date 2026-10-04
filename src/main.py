@@ -8,6 +8,7 @@ import re
 import string
 import subprocess
 import threading
+import time
 import unicodedata
 import urllib.request
 import webbrowser
@@ -107,6 +108,7 @@ SINONIMOS = {
     "muestra": "ver", "muestrame": "ver", "ensename": "ver",
     "anota": "nota", "anotar": "nota", "apunta": "nota",
     "chistes": "chiste", "notas": "nota", "tareas": "tarea", "capturas": "captura",
+    "recuerda": "recuerdame",
 }
 
 
@@ -465,6 +467,7 @@ def cmd_ayuda():
         "abrir app <nombre>, volumen <subir|bajar|silenciar>, bloquear, apagar, reiniciar, limpiar\n"
         "NOTAS: nota <texto>, ver notas, borrar nota <n>\n"
         "TAREAS: tarea <texto>, ver tareas, completar tarea <n>\n"
+        "RECORDATORIOS: recuerdame <texto> en <N> minutos|horas, ver recordatorios, cancelar recordatorio <n>\n"
         "MATEMÁTICAS Y AZAR: calcular <expresión>, dado, moneda, azar <min> <max>\n"
         "OTROS: donde esta la captura, ayuda, salir"
     )
@@ -596,6 +599,88 @@ def cmd_completar_tarea(numero):
     return f"Tarea completada: {tarea['texto']}"
 
 
+# --- Recordatorios (completan la Fase 3: memoria que sobrevive reinicios) ---
+
+RECORDATORIOS_PATH = "recordatorios.json"
+
+
+def _programar_recordatorio(rec):
+    # Programa el aviso para cuando llegue la hora. Devuelve False si ya venció.
+    demora = rec["timestamp"] - time.time()
+    if demora <= 0:
+        return False
+    threading.Timer(demora, lambda: _disparar_recordatorio(rec["id"])).start()
+    return True
+
+
+def _disparar_recordatorio(rid):
+    recs = _cargar_json(RECORDATORIOS_PATH, [])
+    rec = next((r for r in recs if r["id"] == rid), None)
+    if rec is None:
+        return  # fue cancelado antes de sonar
+    if winsound is not None:
+        winsound.Beep(880, 500)
+    print(f"\nCasper: ¡Recordatorio! {rec['texto']}")
+    _guardar_json(RECORDATORIOS_PATH, [r for r in recs if r["id"] != rid])
+
+
+def _reprogramar_recordatorios():
+    # Al iniciar, reprograma los recordatorios pendientes. Los que vencieron
+    # mientras Casper estaba apagado se anuncian como perdidos: un asistente
+    # no finge que nada pasó, te pone al día.
+    recs = _cargar_json(RECORDATORIOS_PATH, [])
+    ahora = time.time()
+    pendientes = []
+    for rec in recs:
+        if not _programar_recordatorio(rec):
+            print(f"Casper: Mientras estabas fuera debí recordarte: {rec['texto']}")
+        else:
+            pendientes.append(rec)
+    _guardar_json(RECORDATORIOS_PATH, pendientes)
+
+
+def cmd_recordar(args):
+    # "llamar al banco en 30 minutos" -> texto="llamar al banco", 1800 segundos.
+    match = re.search(r"\ben\s+(\d+)\s*(minutos?|horas?)\b", args)
+    if not match:
+        return "Uso: recuerdame <texto> en <N> minutos|horas. Ejemplo: recuerdame llamar al banco en 30 minutos"
+    texto = args[:match.start()].strip()
+    if not texto:
+        return "¿Qué quieres que te recuerde?"
+    cantidad = int(match.group(1))
+    segundos = cantidad * 3600 if match.group(2).startswith("hora") else cantidad * 60
+    recs = _cargar_json(RECORDATORIOS_PATH, [])
+    nuevo_id = max([r["id"] for r in recs], default=0) + 1
+    rec = {"id": nuevo_id, "texto": texto, "timestamp": time.time() + segundos}
+    recs.append(rec)
+    _guardar_json(RECORDATORIOS_PATH, recs)
+    _programar_recordatorio(rec)
+    unidad = "hora(s)" if match.group(2).startswith("hora") else "minuto(s)"
+    return f"Te lo recordaré en {cantidad} {unidad}: {texto}"
+
+
+def cmd_ver_recordatorios():
+    recs = _cargar_json(RECORDATORIOS_PATH, [])
+    if not recs:
+        return "No tienes recordatorios pendientes."
+    lineas = []
+    for i, r in enumerate(recs):
+        minutos = max(0, int((r["timestamp"] - time.time()) // 60))
+        lineas.append(f"{i + 1}. {r['texto']} (en ~{minutos} min)")
+    return "\n".join(lineas)
+
+
+def cmd_cancelar_recordatorio(numero):
+    recs = _cargar_json(RECORDATORIOS_PATH, [])
+    try:
+        idx = int(NUMEROS.get(numero.strip(), numero.strip())) - 1
+        borrado = recs.pop(idx)
+    except (ValueError, IndexError):
+        return "Uso: cancelar recordatorio <número>. Míralos con 'ver recordatorios'."
+    _guardar_json(RECORDATORIOS_PATH, recs)
+    return f"Recordatorio cancelado: {borrado['texto']}"
+
+
 # Tabla de sitios conocidos: nombre corto -> URL.
 SITES = {
     "youtube": "https://www.youtube.com",
@@ -668,6 +753,7 @@ COMMANDS = {
     "resumen": cmd_resumen,
     "buenos dias": cmd_resumen,
     "resumen del dia": cmd_resumen,
+    "ver recordatorios": cmd_ver_recordatorios,
     "ver notas": cmd_ver_notas,
     "ver tareas": cmd_ver_tareas,
     "salir": cmd_salir,
@@ -688,6 +774,9 @@ ARG_COMMANDS = {
     "completar tarea": cmd_completar_tarea,
     "temporizador": cmd_temporizador,
     "wikipedia": cmd_wikipedia,
+    "recuerdame": cmd_recordar,
+    "recordar": cmd_recordar,
+    "cancelar recordatorio": cmd_cancelar_recordatorio,
 }
 
 
@@ -772,6 +861,8 @@ def process_message(message):
 
 def main():
     print("Casper iniciado.")
+    # Al arrancar: reprograma recordatorios pendientes y avisa de los vencidos.
+    _reprogramar_recordatorios()
     print("Escribe 'salir' para terminar.")
 
     while True:
