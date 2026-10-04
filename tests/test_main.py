@@ -40,7 +40,8 @@ def test_process_message_prefix():
 
 
 def test_process_message_unknown():
-    assert main.process_message("dime un chiste") == "Todavia no se como responder a eso"
+    # "dime un chiste" ahora SÍ es un comando; usamos otra frase desconocida.
+    assert main.process_message("dime un poema") == "Todavia no se como responder a eso"
 
 
 def test_cmd_hora_format():
@@ -215,3 +216,119 @@ def test_donde_captura():
     assert "/tmp/captura_x.png" in main.cmd_donde_captura()
     # La frase exacta del usuario también debe funcionar (vía fuzzy matching)
     assert "/tmp/captura_x.png" in main.process_message("donde guardaste esa captura")
+
+
+# --- Comandos nuevos: normalización que conserva caracteres ---
+
+def test_normalize_preserva_caracteres_matematicos():
+    # Los caracteres con significado para "calcular" no se eliminan.
+    assert main.normalize_text("calcular 3.5 * (2 + 1)") == "calcular 3.5 * (2 + 1)"
+    # Pero la decoración sí se sigue limpiando.
+    assert main.normalize_text("¡¡hola!!!") == "hola"
+
+
+def test_cmd_calcular():
+    assert main.cmd_calcular("2 + 3 * 4") == "14"
+    assert main.cmd_calcular("(10 - 4) / 2") == "3.0"
+    assert main.cmd_calcular("2 ** 10") == "1024"
+    assert main.cmd_calcular("3.5 * 2") == "7.0"
+    assert main.cmd_calcular("3,5 * 2") == "7.0"  # coma decimal española
+    assert main.cmd_calcular("") == "¿Qué quieres calcular? Ejemplo: calcular 15 * 3 + 2"
+    assert main.cmd_calcular("1 / 0") == "No puedo dividir por cero."
+
+
+def test_cmd_calcular_rechaza_codigo():
+    # Un intento de inyección de código debe ser rechazado, no ejecutado.
+    assert "Solo puedo calcular" in main.cmd_calcular("__import__('os').system('x')")
+    assert "Solo puedo calcular" in main.cmd_calcular("open('/etc/passwd').read()")
+
+
+def test_cmd_chiste():
+    assert main.cmd_chiste() in main.CHISTES
+
+
+def test_cmd_dado_moneda_azar():
+    for _ in range(20):
+        assert 1 <= int(main.cmd_dado().split(": ")[1]) <= 6
+        assert main.cmd_moneda().split(": ")[1] in ("cara", "sello")
+        assert 1 <= int(main.cmd_azar("1 10").split(": ")[1]) <= 10
+    assert "Uso" in main.cmd_azar("10")
+    assert "mayor" in main.cmd_azar("10 1")
+
+
+def test_notas_flujo_completo(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert main.cmd_nota("") == "¿Qué quieres anotar? Ejemplo: nota comprar leche"
+    assert main.cmd_nota("comprar leche") == "Nota 1 guardada."
+    assert main.cmd_nota("llamar al banco") == "Nota 2 guardada."
+    listado = main.cmd_ver_notas()
+    assert "comprar leche" in listado and "llamar al banco" in listado
+    assert "Nota borrada" in main.cmd_borrar_nota("1")
+    assert "comprar leche" not in main.cmd_ver_notas()
+    assert "Uso" in main.cmd_borrar_nota("99")
+    assert "Uso" in main.cmd_borrar_nota("abc")
+
+
+def test_notas_persisten_en_disco(monkeypatch, tmp_path):
+    import json
+    monkeypatch.chdir(tmp_path)
+    main.cmd_nota("persistencia real")
+    with open("notas.json", encoding="utf-8") as f:
+        datos = json.load(f)
+    assert datos[0]["texto"] == "persistencia real"
+
+
+def test_tareas_flujo_completo(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert main.cmd_tarea("estudiar") == "Tarea 1 agregada."
+    assert main.cmd_tarea("hacer ejercicio") == "Tarea 2 agregada."
+    listado = main.cmd_ver_tareas()
+    assert "[ ]" in listado and "estudiar" in listado
+    assert "completada" in main.cmd_completar_tarea("1")
+    assert "[x]" in main.cmd_ver_tareas()
+    assert "Uso" in main.cmd_completar_tarea("99")
+
+
+def test_cmd_bateria(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(main.psutil, "sensors_battery", lambda: None)
+    assert "batería" in main.cmd_bateria()
+    monkeypatch.setattr(main.psutil, "sensors_battery",
+                        lambda: SimpleNamespace(percent=80, power_plugged=True))
+    assert main.cmd_bateria() == "Batería: 80% (cargando)"
+
+
+def test_cmd_temporizador_invalido():
+    assert "Uso" in main.cmd_temporizador("")
+    assert "Uso" in main.cmd_temporizador("abc")
+    assert "Uso" in main.cmd_temporizador("-5")
+
+
+def test_cmd_temporizador_valido(monkeypatch):
+    creados = []
+    class FakeTimer:
+        def __init__(self, segundos, funcion):
+            creados.append((segundos, funcion))
+        def start(self):
+            pass
+    monkeypatch.setattr(main.threading, "Timer", FakeTimer)
+    assert main.cmd_temporizador("5") == "Temporizador de 5 minutos iniciado."
+    assert creados[0][0] == 300
+
+
+def test_cmd_ayuda_lista_comandos():
+    ayuda = main.cmd_ayuda()
+    for palabra in ["calcular", "nota", "tarea", "abrir", "chiste", "temporizador"]:
+        assert palabra in ayuda
+
+
+def test_cmd_limpiar(monkeypatch):
+    monkeypatch.setattr(main.os, "system", lambda cmd: None)
+    assert main.cmd_limpiar() == ""
+
+
+def test_dispatch_calcular_y_nota(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert main.process_message("calcular 6 * 7") == "42"
+    assert main.process_message("nota probar dispatch") == "Nota 1 guardada."
+    assert "probar dispatch" in main.process_message("ver notas")
