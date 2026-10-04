@@ -108,13 +108,29 @@ def cmd_estado():
 
 def cmd_captura():
     # ImageGrab toma una foto de la pantalla y la guardamos con fecha y hora.
+    # Guardamos la ruta ABSOLUTA en _ultima_captura para poder responder
+    # "¿dónde guardaste la captura?" más tarde.
     try:
         imagen = ImageGrab.grab()
     except Exception:
         return "No pude tomar la captura en este equipo."
     nombre = f"captura_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-    imagen.save(nombre)
-    return f"Captura guardada como {nombre}"
+    ruta = os.path.abspath(nombre)
+    imagen.save(ruta)
+    _ultima_captura["ruta"] = ruta
+    return f"Captura guardada en {ruta}"
+
+
+# Última captura tomada. Como la confirmación pendiente, es memoria de
+# corto plazo: Casper recuerda lo último que hizo para poder hablar de ello.
+_ultima_captura = {"ruta": None}
+
+
+def cmd_donde_captura():
+    ruta = _ultima_captura["ruta"]
+    if ruta is None:
+        return "Aún no he tomado ninguna captura en esta sesión."
+    return f"La última captura está en {ruta}"
 
 
 # Aplicaciones conocidas: nombre que dice el usuario -> ejecutable en Windows.
@@ -249,6 +265,8 @@ COMMANDS = {
     "estado del sistema": cmd_estado,
     "captura": cmd_captura,
     "captura de pantalla": cmd_captura,
+    "donde esta la captura": cmd_donde_captura,
+    "donde guardaste la captura": cmd_donde_captura,
     "bloquear": cmd_bloquear,
     "bloquear equipo": cmd_bloquear,
     "apagar": cmd_apagar,
