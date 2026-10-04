@@ -103,3 +103,94 @@ def test_fuzzy_match_arg_command(monkeypatch):
     monkeypatch.setattr(main.webbrowser, "open", lambda url: opened.append(url))
     assert main.process_message("avrir youtube") == "Abriendo youtube..."
     assert opened == ["https://www.youtube.com"]
+
+
+# --- Fase 2: control del sistema ---
+
+def _reset_confirmacion():
+    main._confirmacion_pendiente["nombre"] = None
+    main._confirmacion_pendiente["funcion"] = None
+
+
+def test_cmd_estado(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(main.psutil, "cpu_percent", lambda interval=1: 42.0)
+    monkeypatch.setattr(main.psutil, "virtual_memory",
+                        lambda: SimpleNamespace(percent=55.0, used=4 * 1024**3, total=8 * 1024**3))
+    monkeypatch.setattr(main.psutil, "disk_usage", lambda unidad: SimpleNamespace(percent=70.0))
+    respuesta = main.cmd_estado()
+    assert "42.0" in respuesta and "55.0" in respuesta and "70.0" in respuesta
+
+
+def test_cmd_captura(monkeypatch):
+    from types import SimpleNamespace
+    guardadas = []
+    fake_imagen = SimpleNamespace(save=lambda nombre: guardadas.append(nombre))
+    monkeypatch.setattr(main.ImageGrab, "grab", lambda: fake_imagen)
+    respuesta = main.cmd_captura()
+    assert len(guardadas) == 1 and guardadas[0].endswith(".png")
+    assert guardadas[0] in respuesta
+
+
+def test_cmd_abrir_app(monkeypatch):
+    lanzadas = []
+    monkeypatch.setattr(main.os, "name", "nt")
+    monkeypatch.setattr(main.subprocess, "Popen", lambda exe: lanzadas.append(exe))
+    assert main.cmd_abrir_app("notepad") == "Abriendo notepad..."
+    assert lanzadas == ["notepad.exe"]
+    assert "No conozco" in main.cmd_abrir_app("photoshop")
+    assert "Qué aplicación" in main.cmd_abrir_app("")
+
+
+def test_cmd_volumen(monkeypatch):
+    from types import SimpleNamespace
+    pressed = []
+    monkeypatch.setattr(main, "pyautogui", SimpleNamespace(press=lambda k: pressed.append(k)))
+    assert main.cmd_volumen("subir") == "Volumen: subir"
+    assert pressed == ["volumeup"]
+    assert "Uso" in main.cmd_volumen("turbo")
+
+
+def test_cmd_bloquear_windows(monkeypatch):
+    from types import SimpleNamespace
+    bloqueos = []
+    fake_user32 = SimpleNamespace(LockWorkStation=lambda: bloqueos.append(True))
+    monkeypatch.setattr(main.os, "name", "nt")
+    monkeypatch.setattr(main.ctypes, "windll", SimpleNamespace(user32=fake_user32), raising=False)
+    assert main.cmd_bloquear() == "Equipo bloqueado."
+    assert bloqueos == [True]
+
+
+def test_confirmacion_apagar_si(monkeypatch):
+    _reset_confirmacion()
+    monkeypatch.setattr(main.os, "name", "nt")
+    ejecutados = []
+    monkeypatch.setattr(main.os, "system", lambda cmd: ejecutados.append(cmd))
+    assert "Seguro" in main.cmd_apagar()
+    assert "5 segundos" in main.cmd_si()
+    assert ejecutados == ["shutdown /s /t 5"]
+    # Después de confirmar no queda nada pendiente
+    assert main.cmd_si() == "No hay nada que confirmar."
+
+
+def test_confirmacion_apagar_no():
+    _reset_confirmacion()
+    main.cmd_apagar()
+    assert main.cmd_no() == "Cancelado."
+    assert main.cmd_si() == "No hay nada que confirmar."
+
+
+def test_dispatch_abrir_app_gana_a_abrir(monkeypatch):
+    # "abrir app notepad" debe ir a cmd_abrir_app, no a cmd_abrir.
+    lanzadas = []
+    monkeypatch.setattr(main.os, "name", "nt")
+    monkeypatch.setattr(main.subprocess, "Popen", lambda exe: lanzadas.append(exe))
+    assert main.process_message("abrir app notepad") == "Abriendo notepad..."
+    assert lanzadas == ["notepad.exe"]
+
+
+def test_dispatch_abrir_sitio_sigue_funcionando(monkeypatch):
+    opened = []
+    monkeypatch.setattr(main.webbrowser, "open", lambda url: opened.append(url))
+    assert main.process_message("abrir youtube") == "Abriendo youtube..."
+    assert opened == ["https://www.youtube.com"]

@@ -1,1 +1,4 @@
 pytest
+psutil
+pillow
+pyautogui
