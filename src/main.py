@@ -2,6 +2,7 @@ import string
 import unicodedata
 import webbrowser
 from datetime import datetime
+from urllib.parse import quote_plus
 
 # "def" define una funcion: nos ayuda a tener multiples funciones
 # que podemos usar despues en varias partes del codigo.
@@ -55,14 +56,31 @@ def cmd_fecha():
     return "Hoy es " + hoy.strftime("%A %d/%m/%Y")
 
 
-def cmd_abrir_youtube():
-    # webbrowser abre una URL en el navegador predeterminado.
-    webbrowser.open("https://www.youtube.com")
-    return "Abriendo YouTube..."
-
-
 def cmd_salir():
     return "salir"
+
+
+# Tabla de sitios conocidos: nombre corto -> URL.
+SITES = {
+    "youtube": "https://www.youtube.com",
+    "github": "https://github.com",
+    "google": "https://www.google.com",
+    "netflix": "https://www.netflix.com",
+}
+
+
+def cmd_abrir(sitio):
+    # A diferencia de los otros comandos, este RECIBE un argumento:
+    # el sitio que el usuario quiere abrir.
+    if not sitio:
+        return "¿Qué sitio quieres que abra?"
+    # SITES.get busca el sitio conocido; si no existe, lo buscamos en Google.
+    # quote_plus convierte "stack overflow" en "stack+overflow" para la URL.
+    url = SITES.get(sitio)
+    if url is None:
+        url = "https://www.google.com/search?q=" + quote_plus(sitio)
+    webbrowser.open(url)
+    return "Abriendo " + sitio + "..."
 
 
 # Registro de comandos: la clave es el texto normalizado que el usuario
@@ -78,8 +96,14 @@ COMMANDS = {
     "que hora es": cmd_hora,
     "fecha": cmd_fecha,
     "que dia es": cmd_fecha,
-    "abrir youtube": cmd_abrir_youtube,
     "salir": cmd_salir,
+}
+
+# Comandos con argumento: la clave es la primera palabra ("abrir") y el
+# resto del mensaje se pasa como argumento a la funcion.
+# "abrir youtube" -> cmd_abrir("youtube")
+ARG_COMMANDS = {
+    "abrir": cmd_abrir,
 }
 
 
@@ -88,7 +112,13 @@ def process_message(message):
     handler = COMMANDS.get(message)
     if handler is not None:
         return handler()
-    # 2. Coincidencia por prefijo: "que dia es hoy" empieza con "que dia es".
+    # 2. Comandos con argumento: separamos la intencion ("abrir")
+    # del argumento ("youtube") y se lo pasamos a la funcion.
+    for command, func in ARG_COMMANDS.items():
+        if message == command or message.startswith(command + " "):
+            argumento = message[len(command):].strip()
+            return func(argumento)
+    # 3. Coincidencia por prefijo: "que dia es hoy" empieza con "que dia es".
     # Asi el usuario no tiene que adivinar la frase exacta del comando.
     for command, func in COMMANDS.items():
         if message.startswith(command):
