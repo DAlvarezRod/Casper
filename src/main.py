@@ -4,6 +4,7 @@ import json
 import operator
 import os
 import random
+import re
 import string
 import subprocess
 import threading
@@ -52,6 +53,12 @@ def normalize_text(text):
     # Quitamos los acentos ANTES de comparar con los comandos,
     # asi "Quien eres?" coincide con "quien eres".
     text = strip_accents(text)
+    # Letras repetidas por énfasis ("holaaaa" -> "hola"). Solo letras:
+    # "1000" no debe convertirse en "10".
+    text = re.sub(r"([a-z])\1{2,}", r"\1", text)
+    # Palabras pegadas a números ("temporizador1" -> "temporizador 1").
+    text = re.sub(r"([a-z])(\d)", r"\1 \2", text)
+    text = re.sub(r"(\d)([a-z])", r"\1 \2", text)
     # Estos caracteres se CONSERVAN porque tienen significado para comandos
     # como "calcular": en "calcular 3.5 * 2" el punto y el asterisco no son
     # decoración, son parte del mensaje. Todo lo demás se elimina.
@@ -72,25 +79,64 @@ def fuzzy_match(texto, opciones, umbral=0.8):
     return parecidos[0] if parecidos else None
 
 
-# Sinónimos y conjugaciones comunes del primer verbo. Se aplican SOLO a la
-# primera palabra para no alterar los argumentos: "nota eliminar duplicados"
-# conserva "eliminar" en el texto de la nota. Un sistema real usaría
-# lematización (NLP); esto es la versión honesta con diccionario.
+# Palabras de relleno que no aportan significado al comando.
+# Ojo: "si" y "no" NO están aquí porque son comandos que cambian estado.
+STOPWORDS = {
+    "por", "favor", "me", "puedes", "podrias", "quiero", "quisiera", "deseo",
+    "el", "la", "los", "las", "de", "del", "al", "un", "una", "unos", "unas",
+    "que", "en", "mi", "mis", "tu", "tus", "su", "sus", "se", "es", "son",
+    "esta", "este", "esto", "estos", "con", "para", "como", "muy",
+    "tan", "pero", "y", "o", "a", "ante", "the", "of", "to",
+}
+
+# Números en palabras -> dígitos. Sin esto "borrar nota dos" sería inútil.
+NUMEROS = {
+    "cero": "0", "uno": "1", "una": "1", "dos": "2", "tres": "3",
+    "cuatro": "4", "cinco": "5", "seis": "6", "siete": "7", "ocho": "8",
+    "nueve": "9", "diez": "10",
+    "primera": "1", "primero": "1", "segunda": "2", "segundo": "2",
+    "tercera": "3", "tercero": "3",
+}
+
+# Sinónimos y conjugaciones. Un sistema real usaría lematización (NLP);
+# esto es la versión honesta con diccionario.
 SINONIMOS = {
-    "eliminar": "borrar",
-    "quita": "borrar",
-    "apaga": "apagar",
-    "reinicia": "reiniciar",
-    "muestra": "ver",
-    "muestrame": "ver",
+    "eliminar": "borrar", "elimina": "borrar", "quita": "borrar", "borra": "borrar",
+    "apaga": "apagar", "reinicia": "reiniciar",
     "abre": "abrir",
+    "muestra": "ver", "muestrame": "ver", "ensename": "ver",
+    "anota": "nota", "anotar": "nota", "apunta": "nota",
+    "chistes": "chiste", "notas": "nota", "tareas": "tarea", "capturas": "captura",
 }
 
 
-def aplicar_sinonimos(message):
-    primera, _, resto = message.partition(" ")
-    primera = SINONIMOS.get(primera, primera)
-    return primera + (" " + resto if resto else "")
+def tokenizar(message):
+    # Convierte el mensaje en palabras significativas: sin muletillas,
+    # con números en dígitos y sinónimos unificados. Esto SOLO se usa
+    # para buscar el comando; los argumentos salen del mensaje original.
+    tokens = []
+    for palabra in message.split():
+        palabra = palabra.strip(",;:!?")
+        if not palabra or palabra in STOPWORDS:
+            continue
+        palabra = NUMEROS.get(palabra, palabra)
+        palabra = SINONIMOS.get(palabra, palabra)
+        tokens.append(palabra)
+    return tokens
+
+
+def puntaje_tokens(tokens_msg, tokens_cmd):
+    # Devuelve (palabras coincidentes, fracción del comando cubierta).
+    # La tupla permite desempatar: más coincidencias gana.
+    if not tokens_cmd:
+        return (0, 0.0)
+    comunes = set(tokens_msg) & set(tokens_cmd)
+    return (len(comunes), len(comunes) / len(tokens_cmd))
+
+
+# Comandos que cambian estado: en la etapa de tokens se excluyen para que
+# una frase larga nunca dispare una confirmación por accidente.
+COMANDOS_SENSIBLES = {"si", "no"}
 
 
 # Respuesta cuando nada coincide. En vez de solo decir "no sé", enseña
@@ -342,7 +388,7 @@ def cmd_moneda():
 
 
 def cmd_azar(rango):
-    partes = rango.split()
+    partes = [NUMEROS.get(p, p) for p in rango.split()]
     try:
         minimo, maximo = int(partes[0]), int(partes[1])
     except (IndexError, ValueError):
@@ -366,6 +412,7 @@ def cmd_limpiar():
 
 
 def cmd_temporizador(minutos):
+    minutos = NUMEROS.get(minutos.strip(), minutos.strip())
     try:
         mins = float(minutos.replace(",", "."))
         if mins <= 0:
@@ -483,6 +530,9 @@ def cmd_ver_notas():
 
 def cmd_borrar_nota(numero):
     notas = _cargar_json(NOTAS_PATH, [])
+    # Acepta "dos" además de "2": los números en palabras llegan aquí
+    # cuando el comando se resolvió por tokens.
+    numero = NUMEROS.get(numero.strip(), numero.strip())
     try:
         borrada = notas.pop(int(numero) - 1)
     except (ValueError, IndexError):
@@ -513,6 +563,7 @@ def cmd_ver_tareas():
 
 def cmd_completar_tarea(numero):
     tareas = _cargar_json(TAREAS_PATH, [])
+    numero = NUMEROS.get(numero.strip(), numero.strip())
     try:
         tarea = tareas[int(numero) - 1]
     except (ValueError, IndexError):
@@ -539,6 +590,9 @@ SITES = {
 def cmd_abrir(sitio):
     # A diferencia de los otros comandos, este RECIBE un argumento:
     # el sitio que el usuario quiere abrir.
+    # Limpiamos muletillas del argumento: "abrir el whatsapp por favor"
+    # -> "whatsapp". (En "nota" no haríamos esto: ahí el texto es del usuario.)
+    sitio = " ".join(p for p in sitio.split() if p not in STOPWORDS)
     if not sitio:
         return "¿Qué sitio quieres que abra?"
     # SITES.get busca el sitio conocido; si no existe, lo buscamos en Google.
@@ -626,8 +680,6 @@ def _extraer_comando_arg(message):
 
 
 def process_message(message):
-    # 0. Sinónimos: "eliminar nota 1" -> "borrar nota 1" antes de buscar.
-    message = aplicar_sinonimos(message)
     # 1. Coincidencia exacta: la forma mas rapida y segura.
     handler = COMMANDS.get(message)
     if handler is not None:
@@ -636,7 +688,7 @@ def process_message(message):
     # del argumento ("notepad") y se lo pasamos a la funcion.
     func, arg = _extraer_comando_arg(message)
     if func is None:
-        # 2b. Typo en el comando: corregimos la primera palabra con
+        # 2b. Typo en el verbo: corregimos la primera palabra con
         # fuzzy matching y reintentamos el paso 2 una sola vez.
         primera, _, resto = message.partition(" ")
         inicios = {c.split(" ")[0] for c in ARG_COMMANDS}
@@ -646,12 +698,39 @@ def process_message(message):
             func, arg = _extraer_comando_arg(corregido)
     if func is not None:
         return func(arg)
-    # 3. Coincidencia por prefijo: "que dia es hoy" empieza con "que dia es".
-    # Asi el usuario no tiene que adivinar la frase exacta del comando.
+    # 3. Prefijo con límite de palabra: "que dia es hoy" empieza con
+    # "que dia es ". El espacio importa: antes "simple" disparaba "si".
     for command, func in COMMANDS.items():
-        if message.startswith(command):
+        if message == command or message.startswith(command + " "):
             return func()
-    # 4. Coincidencia difusa: si nada anterior funciono, buscamos el comando
+    # 4. Tokens: el orden y las muletillas dejan de importar.
+    # "por favor elimina la primera nota" -> {borrar, 1, nota} -> borrar nota.
+    # Los comandos sensibles ("si"/"no") se excluyen: una frase larga jamás
+    # debe confirmar una acción destructiva por accidente.
+    tokens_msg = tokenizar(message)
+    mejor, mejor_llamada = (0, 0.0), None
+    for command, func in COMMANDS.items():
+        if command in COMANDOS_SENSIBLES:
+            continue
+        puntos = puntaje_tokens(tokens_msg, tokenizar(command))
+        # Umbral 0.6: con 0.5, "dime un poema" coincidía con "dime un chiste"
+        # (1 de 2 palabras). Ser permisivo está bien; inventar respuestas, no.
+        if puntos > mejor and puntos[1] >= 0.6:
+            mejor = puntos
+            # f=func congela la función ahora: sin esto, lambda usaría
+            # el último valor de func al llamarse (late binding).
+            mejor_llamada = lambda f=func: f()
+    for command in sorted(ARG_COMMANDS, key=len, reverse=True):
+        puntos = puntaje_tokens(tokens_msg, tokenizar(command))
+        if puntos > mejor and puntos[1] >= 0.6:
+            usados = set(tokenizar(command))
+            resto = [t for t in tokens_msg if t not in usados]
+            mejor = puntos
+            # lambda con valores por defecto: congela f y a en este momento.
+            mejor_llamada = lambda f=ARG_COMMANDS[command], a=" ".join(resto): f(a)
+    if mejor_llamada is not None:
+        return mejor_llamada()
+    # 5. Coincidencia difusa: si nada anterior funciono, buscamos el comando
     # mas parecido. "holaa" -> "hola", pero "xyz" no coincide con nada.
     parecido = fuzzy_match(message, COMMANDS.keys())
     if parecido is not None:
