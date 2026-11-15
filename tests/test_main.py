@@ -11,6 +11,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import main
+import pytest
+import requests
+import web
 
 
 def test_strip_accents():
@@ -540,3 +543,123 @@ def test_reprogramar_anuncia_vencidos(monkeypatch, tmp_path, capsys):
     assert "Mientras estabas fuera" in out and "vencido" in out
     assert len(timers) == 1  # solo el futuro se reprogramó
     assert [r["id"] for r in main._cargar_json(main.RECORDATORIOS_PATH, [])] == [2]
+
+
+# --- Fase 4: poderes web ---
+
+class FakeResp:
+    def __init__(self, data=None, status=200, bad_json=False):
+        self._data = data
+        self.status_code = status
+        self._bad = bad_json
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.exceptions.HTTPError(f"{self.status_code}")
+
+    def json(self):
+        if self._bad:
+            raise ValueError("no json")
+        return self._data
+
+
+def test_web_get_json_ok(monkeypatch):
+    monkeypatch.setattr(web.requests, "get",
+                        lambda *a, **k: FakeResp({"ok": True}))
+    assert web.get_json("https://ejemplo.com/x") == {"ok": True}
+
+
+def test_web_get_json_errores(monkeypatch):
+    def _timeout(*a, **k):
+        raise requests.exceptions.Timeout()
+    monkeypatch.setattr(web.requests, "get", _timeout)
+    with pytest.raises(web.WebError, match="tardó demasiado"):
+        web.get_json("https://ejemplo.com/x")
+
+    def _conn(*a, **k):
+        raise requests.exceptions.ConnectionError()
+    monkeypatch.setattr(web.requests, "get", _conn)
+    with pytest.raises(web.WebError, match="No hay conexión"):
+        web.get_json("https://ejemplo.com/x")
+
+    monkeypatch.setattr(web.requests, "get",
+                        lambda *a, **k: FakeResp(status=404))
+    with pytest.raises(web.WebError, match="HTTP 404"):
+        web.get_json("https://ejemplo.com/x")
+
+    monkeypatch.setattr(web.requests, "get",
+                        lambda *a, **k: FakeResp(bad_json=True))
+    with pytest.raises(web.WebError, match="no era JSON"):
+        web.get_json("https://ejemplo.com/x")
+
+
+def _fake_clima(url, params=None, headers=None):
+    if "geocoding" in url:
+        return {"results": [{"name": "Bogotá", "country": "Colombia",
+                             "latitude": 4.6, "longitude": -74.08}]}
+    return {"current": {"temperature_2m": 14, "relative_humidity_2m": 80,
+                        "weather_code": 3, "wind_speed_10m": 12}}
+
+
+def test_cmd_clima(monkeypatch):
+    monkeypatch.setattr(main, "get_json", _fake_clima)
+    r = main.process_message("clima bogota")
+    assert "Bogotá" in r and "14" in r and "nublado" in r and "80%" in r
+    # "en" es muletilla: "clima en bogota" debe funcionar igual.
+    assert "Bogotá" in main.process_message("clima en bogota")
+    assert "¿De qué ciudad" in main.cmd_clima("")
+
+
+def test_cmd_clima_ciudad_no_encontrada(monkeypatch):
+    monkeypatch.setattr(main, "get_json", lambda *a, **k: {})
+    assert "No encontré" in main.cmd_clima("atlantis")
+
+
+def test_cmd_clima_sin_internet(monkeypatch):
+    def _falla(*a, **k):
+        raise web.WebError("sin internet")
+    monkeypatch.setattr(main, "get_json", _falla)
+    assert main.cmd_clima("bogota") == "sin internet"
+
+
+def test_cmd_dolar(monkeypatch):
+    monkeypatch.setattr(main, "_tasas", lambda base: {"COP": 3285.26})
+    assert main.cmd_dolar() == "1 USD = $3.285 COP"
+
+
+def test_cmd_convertir(monkeypatch):
+    monkeypatch.setattr(main, "_tasas",
+                        lambda base: {"COP": 3285.26, "USD": 1.0, "EUR": 0.9})
+    assert "$328.526" in main.process_message("convertir 100 usd a cop")
+    assert "50 USD = 45.00 EUR" in main.process_message("convertir 50 dolares a euros")
+    assert "Uso" in main.cmd_convertir("usd a cop")
+    assert "Uso" in main.cmd_convertir("")
+    assert "3 letras" in main.cmd_convertir("100 us a cop")
+    assert "No conozco la moneda 'XXX'" in main.cmd_convertir("100 usd a xxx")
+
+
+def test_cmd_noticias_hackernews(monkeypatch):
+    monkeypatch.delenv("NEWS_API_KEY", raising=False)
+    def _fake(url, params=None, headers=None):
+        if "topstories" in url:
+            return [111, 222]
+        return {"title": "Titular " + url.split("/")[-1].replace(".json", "")}
+    monkeypatch.setattr(main, "get_json", _fake)
+    r = main.process_message("noticias")
+    assert "Hacker News" in r and "Titular 111" in r and "Titular 222" in r
+
+
+def test_cmd_noticias_con_clave(monkeypatch):
+    monkeypatch.setenv("NEWS_API_KEY", "clave-falsa")
+    monkeypatch.setattr(main, "get_json",
+                        lambda *a, **k: {"articles": [{"title": "A"}, {"title": "B"}]})
+    r = main.cmd_noticias()
+    assert "Titulares de hoy" in r and "- A" in r and "- B" in r
+
+
+def test_cmd_noticias_sin_internet(monkeypatch):
+    monkeypatch.delenv("NEWS_API_KEY", raising=False)
+    def _falla(*a, **k):
+        raise web.WebError("sin internet")
+    monkeypatch.setattr(main, "get_json", _falla)
+    assert main.cmd_noticias() == "sin internet"

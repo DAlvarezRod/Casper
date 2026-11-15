@@ -18,6 +18,7 @@ from urllib.parse import quote, quote_plus
 
 import psutil
 from PIL import ImageGrab
+from web import WebError, get_json
 
 try:
     # pyautogui necesita un entorno gráfico para importarse.
@@ -462,7 +463,8 @@ def cmd_ayuda():
         "CONVERSACIÓN: hola, quien eres, chiste\n"
         "TIEMPO: hora, fecha, temporizador <minutos>\n"
         "RESUMEN: resumen, buenos dias\n"
-        "WEB: abrir <sitio>, wikipedia <tema>\n"
+        "WEB: abrir <sitio>, wikipedia <tema>, clima <ciudad>, dolar, "
+        "convertir <cantidad> <moneda> a <moneda>, noticias\n"
         "SISTEMA: estado del sistema, bateria, captura de pantalla, "
         "abrir app <nombre>, volumen <subir|bajar|silenciar>, bloquear, apagar, reiniciar, limpiar\n"
         "NOTAS: nota <texto>, ver notas, borrar nota <n>\n"
@@ -514,6 +516,134 @@ def cmd_wikipedia(tema):
     if not resumen:
         return f"No encontré nada sobre '{tema}' en Wikipedia."
     return resumen[:500] + ("..." if len(resumen) > 500 else "")
+
+
+# --- Fase 4: poderes web (APIs HTTP reales) ---
+
+# Códigos WMO de Open-Meteo -> descripción en español.
+CODIGOS_CLIMA = {
+    0: "despejado", 1: "mayormente despejado", 2: "parcialmente nublado", 3: "nublado",
+    45: "niebla", 48: "niebla con escarcha",
+    51: "llovizna ligera", 53: "llovizna", 55: "llovizna intensa",
+    61: "lluvia ligera", 63: "lluvia", 65: "lluvia intensa",
+    71: "nieve ligera", 73: "nieve", 75: "nieve intensa",
+    80: "chubascos ligeros", 81: "chubascos", 82: "chubascos intensos",
+    95: "tormenta eléctrica",
+}
+
+
+def cmd_clima(ciudad):
+    # Dos llamadas encadenadas: primero geocodificación (ciudad -> lat/lon),
+    # luego el pronóstico. Open-Meteo es gratis y no pide clave.
+    ciudad = " ".join(p for p in ciudad.split() if p not in STOPWORDS)
+    if not ciudad:
+        return "¿De qué ciudad quieres el clima? Ejemplo: clima bogota"
+    try:
+        geo = get_json("https://geocoding-api.open-meteo.com/v1/search",
+                       params={"name": ciudad, "count": 1, "language": "es", "format": "json"})
+        resultados = geo.get("results") or []
+        if not resultados:
+            return f"No encontré la ciudad '{ciudad}'."
+        lugar = resultados[0]
+        datos = get_json("https://api.open-meteo.com/v1/forecast", params={
+            "latitude": lugar["latitude"], "longitude": lugar["longitude"],
+            "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m"})
+        actual = datos["current"]
+        descripcion = CODIGOS_CLIMA.get(actual["weather_code"], "condición desconocida")
+        return (f"{lugar['name']}, {lugar.get('country', '')}: "
+                f"{actual['temperature_2m']}°C, {descripcion}, "
+                f"humedad {actual['relative_humidity_2m']}%, "
+                f"viento {actual['wind_speed_10m']} km/h")
+    except WebError as e:
+        return str(e)
+
+
+def _tasas(base):
+    # ExchangeRate-API gratis: un solo llamado devuelve TODAS las tasas
+    # frente a la moneda base. "success" es su forma de decir que salió bien.
+    datos = get_json(f"https://open.er-api.com/v6/latest/{base}")
+    if datos.get("result") != "success":
+        raise WebError("El servicio de divisas no respondió bien.")
+    return datos["rates"]
+
+
+def _formato_cop(valor):
+    # En español el separador de miles es el punto: $3.285, no $3,285.
+    return f"${valor:,.0f}".replace(",", ".")
+
+
+def cmd_dolar():
+    try:
+        tasas = _tasas("USD")
+        return f"1 USD = {_formato_cop(tasas['COP'])} COP"
+    except WebError as e:
+        return str(e)
+
+
+# Alias en español para los códigos de moneda ISO (usd, cop, eur...).
+MONEDAS = {
+    "dolar": "USD", "dolares": "USD",
+    "peso": "COP", "pesos": "COP",
+    "euro": "EUR", "euros": "EUR",
+}
+
+
+def _resolver_moneda(token):
+    codigo = MONEDAS.get(token, token.upper())
+    return codigo if len(codigo) == 3 and codigo.isalpha() else None
+
+
+def cmd_convertir(args):
+    # "convertir 100 usd a cop" / "convertir 50 dolares a euros".
+    match = re.match(r"(\S+)\s+(\S+)\s+a\s+(\S+)", args)
+    if not match:
+        return "Uso: convertir <cantidad> <moneda> a <moneda>. Ejemplo: convertir 100 usd a cop"
+    cantidad_txt, origen_txt, destino_txt = match.groups()
+    cantidad_txt = NUMEROS.get(cantidad_txt, cantidad_txt)
+    try:
+        cantidad = float(cantidad_txt.replace(",", "."))
+    except ValueError:
+        return "Uso: convertir <cantidad> <moneda> a <moneda>. Ejemplo: convertir 100 usd a cop"
+    origen = _resolver_moneda(origen_txt)
+    destino = _resolver_moneda(destino_txt)
+    if origen is None or destino is None:
+        return "Usa códigos de 3 letras (usd, cop, eur) o nombres como dolares, pesos, euros."
+    try:
+        tasas = _tasas(origen)
+        if destino not in tasas:
+            return f"No conozco la moneda '{destino}'."
+        resultado = cantidad * tasas[destino]
+    except WebError as e:
+        return str(e)
+    if destino == "COP":
+        return f"{cantidad:g} {origen} = {_formato_cop(resultado)} COP"
+    return f"{cantidad:g} {origen} = {resultado:,.2f} {destino}"
+
+
+def cmd_noticias():
+    # Dos fuentes, una decisión por entorno:
+    # - Sin NEWS_API_KEY: Hacker News (gratis, sin registro, tech).
+    # - Con NEWS_API_KEY (variable de entorno): NewsAPI, titulares de Colombia.
+    # La clave NUNCA va en el código: se lee del entorno y .env está en .gitignore.
+    try:
+        clave = os.environ.get("NEWS_API_KEY")
+        if clave:
+            datos = get_json("https://newsapi.org/v2/top-headlines",
+                             params={"country": "co", "pageSize": 5},
+                             headers={"X-Api-Key": clave})
+            articulos = datos.get("articles") or []
+            if not articulos:
+                return "No hay noticias por ahora."
+            lineas = [f"- {a['title']}" for a in articulos]
+            return "Titulares de hoy:\n" + "\n".join(lineas)
+        ids = get_json("https://hacker-news.firebaseio.com/v0/topstories.json")[:5]
+        lineas = []
+        for i in ids:
+            item = get_json(f"https://hacker-news.firebaseio.com/v0/item/{i}.json")
+            lineas.append(f"- {item.get('title', '(sin título)')}")
+        return "Titulares de tecnología (Hacker News):\n" + "\n".join(lineas)
+    except WebError as e:
+        return str(e)
 
 
 # --- Notas y tareas (persistencia en archivos JSON) ---
@@ -756,6 +886,10 @@ COMMANDS = {
     "ver recordatorios": cmd_ver_recordatorios,
     "ver notas": cmd_ver_notas,
     "ver tareas": cmd_ver_tareas,
+    "dolar": cmd_dolar,
+    "precio del dolar": cmd_dolar,
+    "noticias": cmd_noticias,
+    "titulares": cmd_noticias,
     "salir": cmd_salir,
 }
 
@@ -774,6 +908,8 @@ ARG_COMMANDS = {
     "completar tarea": cmd_completar_tarea,
     "temporizador": cmd_temporizador,
     "wikipedia": cmd_wikipedia,
+    "clima": cmd_clima,
+    "convertir": cmd_convertir,
     "recuerdame": cmd_recordar,
     "recordar": cmd_recordar,
     "cancelar recordatorio": cmd_cancelar_recordatorio,

@@ -2,3 +2,4 @@ pytest
 psutil
 pillow
 pyautogui
+requests
