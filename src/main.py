@@ -18,6 +18,7 @@ from urllib.parse import quote, quote_plus
 
 import psutil
 from PIL import ImageGrab
+from voz import escuchar, hablar
 from web import WebError, get_json
 
 try:
@@ -110,6 +111,7 @@ SINONIMOS = {
     "anota": "nota", "anotar": "nota", "apunta": "nota",
     "chistes": "chiste", "notas": "nota", "tareas": "tarea", "capturas": "captura",
     "recuerda": "recuerdame",
+    "escucha": "escuchar",
 }
 
 
@@ -465,6 +467,7 @@ def cmd_ayuda():
         "RESUMEN: resumen, buenos dias\n"
         "WEB: abrir <sitio>, wikipedia <tema>, clima <ciudad>, dolar, "
         "convertir <cantidad> <moneda> a <moneda>, noticias\n"
+        "VOZ: decir <texto>, escuchar, voz on|off\n"
         "SISTEMA: estado del sistema, bateria, captura de pantalla, "
         "abrir app <nombre>, volumen <subir|bajar|silenciar>, bloquear, apagar, reiniciar, limpiar\n"
         "NOTAS: nota <texto>, ver notas, borrar nota <n>\n"
@@ -644,6 +647,46 @@ def cmd_noticias():
         return "Titulares de tecnología (Hacker News):\n" + "\n".join(lineas)
     except WebError as e:
         return str(e)
+
+
+# --- Fase 5: voz (hablar y escuchar) ---
+
+# Si la salida de voz está activada, main() habla cada respuesta
+# en un hilo aparte para no bloquear el teclado.
+_voz_activa = {"on": False}
+
+
+def cmd_decir(texto):
+    if not texto:
+        return "¿Qué quieres que diga? Ejemplo: decir hola mundo"
+    hablar(texto)
+    return texto
+
+
+def cmd_escuchar():
+    texto, error = escuchar()
+    if error is not None:
+        return error
+    # El texto transcrito se procesa como si lo hubieras escrito.
+    # Ojo: si dijiste "escuchar", no volvemos a escuchar (bucle infinito).
+    if normalize_text(texto) == "escuchar":
+        return "Ya estoy escuchando."
+    respuesta = process_message(normalize_text(texto))
+    return f"Escuché: '{texto}'\n{respuesta}"
+
+
+def cmd_voz(arg):
+    arg = arg.strip()
+    if arg == "on":
+        _voz_activa["on"] = True
+        return "Voz activada: ahora hablaré mis respuestas."
+    if arg == "off":
+        _voz_activa["on"] = False
+        return "Voz desactivada."
+    if arg == "":
+        estado = "activada" if _voz_activa["on"] else "desactivada"
+        return f"La voz está {estado}. Usa 'voz on' o 'voz off' para cambiarla."
+    return "Uso: voz on | voz off"
 
 
 # --- Notas y tareas (persistencia en archivos JSON) ---
@@ -890,6 +933,7 @@ COMMANDS = {
     "precio del dolar": cmd_dolar,
     "noticias": cmd_noticias,
     "titulares": cmd_noticias,
+    "escuchar": cmd_escuchar,
     "salir": cmd_salir,
 }
 
@@ -910,6 +954,8 @@ ARG_COMMANDS = {
     "wikipedia": cmd_wikipedia,
     "clima": cmd_clima,
     "convertir": cmd_convertir,
+    "decir": cmd_decir,
+    "voz": cmd_voz,
     "recuerdame": cmd_recordar,
     "recordar": cmd_recordar,
     "cancelar recordatorio": cmd_cancelar_recordatorio,
@@ -1013,6 +1059,10 @@ def main():
         # Las respuestas vacías (como la de "limpiar") no se imprimen.
         if response:
             print("Casper:", response)
+            # Con la voz activada, Casper también HABLA la respuesta,
+            # en un hilo aparte para no bloquear el teclado.
+            if _voz_activa["on"]:
+                threading.Thread(target=hablar, args=(response,), daemon=True).start()
 
 
 if __name__ == "__main__":

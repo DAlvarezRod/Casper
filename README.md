@@ -56,6 +56,19 @@ Casper consulta APIs reales por internet:
   `NEWS_API_KEY` (o en un archivo `.env`, ver `.env.example`), muestra
   titulares generales de Colombia. Las claves nunca van en el código.
 
+## Fase 5 — Voz
+
+Casper habla y escucha (todo opcional: sin micrófono o sin las librerías,
+los comandos avisan en vez de romperse):
+
+- `decir <texto>` — Casper lo dice en voz alta (pyttsx3, offline, voces SAPI).
+- `escuchar` — graba 5 segundos del micrófono, lo transcribe con Google
+  (gratis, sin clave) y procesa lo que dijiste como si lo hubieras escrito.
+- `voz on` / `voz off` — activa o desactiva que Casper hable sus respuestas.
+
+En Windows, si no hay voz en español instalada, Windows la descarga en
+Configuración → Hora e idioma → Voz. El micrófono necesita permiso de la app.
+
 ## Cómo correr las pruebas
 
 ```bash

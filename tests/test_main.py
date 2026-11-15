@@ -663,3 +663,49 @@ def test_cmd_noticias_sin_internet(monkeypatch):
         raise web.WebError("sin internet")
     monkeypatch.setattr(main, "get_json", _falla)
     assert main.cmd_noticias() == "sin internet"
+
+
+# --- Fase 5: voz ---
+
+def test_cmd_decir(monkeypatch):
+    said = []
+    monkeypatch.setattr(main, "hablar", lambda t: said.append(t) or True)
+    assert main.cmd_decir("hola mundo") == "hola mundo"
+    assert said == ["hola mundo"]
+    assert "¿Qué quieres que diga" in main.cmd_decir("")
+
+
+def test_cmd_voz_toggle():
+    main._voz_activa["on"] = False
+    assert "desactivada" in main.cmd_voz("")
+    assert "activada" in main.cmd_voz("on")
+    assert main._voz_activa["on"] is True
+    assert "desactivada" in main.cmd_voz("off")
+    assert main._voz_activa["on"] is False
+    assert "Uso" in main.cmd_voz("quizas")
+
+
+def test_cmd_escuchar_procesa(monkeypatch):
+    monkeypatch.setattr(main, "escuchar", lambda segundos=5: ("que hora es", None))
+    r = main.cmd_escuchar()
+    assert "Escuché: 'que hora es'" in r and "Son las" in r
+
+
+def test_cmd_escuchar_error(monkeypatch):
+    monkeypatch.setattr(main, "escuchar",
+                        lambda segundos=5: (None, "No te entendí, ¿puedes repetir?"))
+    assert "No te entendí" in main.cmd_escuchar()
+
+
+def test_cmd_escuchar_no_recursivo(monkeypatch):
+    # Decir "escuchar" por voz no debe volver a escuchar para siempre.
+    monkeypatch.setattr(main, "escuchar", lambda segundos=5: ("escuchar", None))
+    assert "Ya estoy escuchando" in main.cmd_escuchar()
+
+
+def test_dispatch_voz(monkeypatch):
+    monkeypatch.setattr(main, "hablar", lambda t: True)
+    assert main.process_message("decir hola") == "hola"
+    assert "activada" in main.process_message("voz on")
+    main.process_message("voz off")
+    assert "escucha" in main.process_message("ayuda")
