@@ -239,6 +239,20 @@ def _preguntar_gemini(mensaje, usuario, contexto=None, texto_directo=None):
     return "".join(textos) or None, None
 
 
+def _mensaje_limite(error):
+    # Google distingue el límite por minuto del límite por día en el cuerpo
+    # del error (GenerateRequestsPerMinutePerProject vs ...PerDayPerProject).
+    # Decir "espera un minuto" cuando el límite es diario sería mentir:
+    # ese se reinicia a medianoche, hora del Pacífico.
+    if "PerDay" in str(error):
+        return ("Límite diario de la API gratuita alcanzado. "
+                "Se reinicia a medianoche (hora del Pacífico, EE. UU.). "
+                "Si necesitas seguir probando hoy, cambia a Ollama local "
+                "(CASPER_LLM=ollama en el .env).")
+    return ("Estoy recibiendo demasiadas preguntas seguidas "
+            "(límite de la API gratuita). Espera un minuto e inténtalo de nuevo.")
+
+
 def responder(mensaje, ejecutores, usuario, contexto=None):
     # Pregunta al modelo y, si pide una herramienta, la ejecuta.
     # Devuelve el texto final, o None si el cerebro no está disponible.
@@ -256,8 +270,7 @@ def responder(mensaje, ejecutores, usuario, contexto=None):
             print(f"[cerebro] {e}", file=sys.stderr)
         if "429" in str(e):
             # Límite de la API gratuita: no es un "no sé", es un "espera".
-            return ("Estoy recibiendo demasiadas preguntas seguidas "
-                    "(límite de la API gratuita). Espera un minuto e inténtalo de nuevo.")
+            return _mensaje_limite(e)
         return None
     if llamada is not None:
         funcion = ejecutores.get(llamada["nombre"])
@@ -293,8 +306,7 @@ def responder(mensaje, ejecutores, usuario, contexto=None):
             if os.environ.get("CASPER_DEBUG"):
                 print(f"[cerebro] segunda pasada: {e}", file=sys.stderr)
             if "429" in str(e):
-                return ("Estoy recibiendo demasiadas preguntas seguidas "
-                        "(límite de la API gratuita). Espera un minuto e inténtalo de nuevo.")
+                return _mensaje_limite(e)
             return resultado
         return texto2 or resultado
     return texto or None

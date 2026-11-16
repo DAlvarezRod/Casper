@@ -94,6 +94,12 @@ ni salir. Las acciones destructivas y el control de voz los inicia solo
 el humano. Las claves viven en variables de entorno o en `.env`, nunca en
 el código.
 
+**Límites (429):** Casper distingue el límite por minuto del límite por
+diario leyendo el cuerpo del error de Google: si es por minuto, dice que
+esperes un minuto; si es diario, dice que se reinicia a medianoche (hora
+del Pacífico) y sugiere Ollama local para seguir probando. El código HTTP
+solo no basta: dos 429 idénticos pueden significar cosas distintas.
+
 **Segunda pasada:** cuando el modelo llama a una herramienta, Casper
 ejecuta y le devuelve el resultado para que componga la respuesta final
 (la herramienta informa, el modelo razona). Sin esto, "nací en 2007, eso

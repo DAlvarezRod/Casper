@@ -46,3 +46,21 @@ def test_post_json_errores(monkeypatch):
                         lambda *a, **k: FakeResp(status=500))
     with pytest.raises(web.WebError, match="HTTP 500"):
         web.post_json("https://ejemplo.com/x", {})
+
+
+def test_post_json_429_incluye_detalle_del_cuerpo(monkeypatch):
+    # El cuerpo del 429 dice cuál límite se agotó (por día vs por minuto).
+    cuerpo = ('{"error": {"details": [{"quotaId": '
+              '"GenerateRequestsPerDayPerProject"}]}}')
+
+    class Resp429(FakeResp):
+        def __init__(self):
+            super().__init__(status=429)
+            self.text = cuerpo
+
+    monkeypatch.setattr(web.requests, "post", lambda *a, **k: Resp429())
+    import pytest
+    with pytest.raises(web.WebError) as exc:
+        web.post_json("http://x", {})
+    assert "PerDay" in str(exc.value)
+    assert "429" in str(exc.value)

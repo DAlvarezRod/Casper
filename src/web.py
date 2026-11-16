@@ -14,6 +14,16 @@ class WebError(Exception):
 TIMEOUT = 10  # segundos; sin timeout, una API caída congelaría a Casper para siempre
 
 
+def _error_http(r):
+    # El código HTTP solo dice "429"; el cuerpo dice CUÁL límite se agotó
+    # (por minuto o por día). Sin ese detalle, Casper no puede decirle al
+    # usuario si debe esperar un minuto o hasta mañana.
+    mensaje = f"El servicio devolvió un error (HTTP {r.status_code})."
+    if getattr(r, "text", None):
+        mensaje += f" Detalle: {r.text[:400]}"
+    return mensaje
+
+
 def get_json(url, params=None, headers=None):
     # requests.get devuelve una respuesta; .json() la convierte en dict/list.
     # raise_for_status() lanza HTTPError si el código no es 2xx (404, 500...).
@@ -26,7 +36,7 @@ def get_json(url, params=None, headers=None):
     except requests.exceptions.ConnectionError:
         raise WebError("No hay conexión a internet o el servicio no responde.")
     except requests.exceptions.HTTPError:
-        raise WebError(f"El servicio devolvió un error (HTTP {r.status_code}).")
+        raise WebError(_error_http(r))
     except ValueError:
         raise WebError("El servicio respondió algo que no entiendo (no era JSON).")
 
@@ -44,6 +54,6 @@ def post_json(url, payload, headers=None, timeout=60):
     except requests.exceptions.ConnectionError:
         raise WebError("No hay conexión a internet o el servicio no responde.")
     except requests.exceptions.HTTPError:
-        raise WebError(f"El servicio devolvió un error (HTTP {r.status_code}).")
+        raise WebError(_error_http(r))
     except ValueError:
         raise WebError("El servicio respondió algo que no entiendo (no era JSON).")

@@ -249,3 +249,26 @@ def test_segunda_pasada_429_no_devuelve_resultado_crudo(monkeypatch):
                           ejecutores, USUARIO)
     assert "demasiadas preguntas" in r
     assert "16/11/2026" not in r
+
+
+def test_responder_429_diario(monkeypatch):
+    def _post(*a, **k):
+        raise WebError("HTTP 429. Detalle: GenerateRequestsPerDayPerProject")
+    monkeypatch.setattr(cerebro, "post_json", _post)
+    r = cerebro.responder("hola", {}, USUARIO)
+    assert "diario" in r and "medianoche" in r
+    assert "Espera un minuto" not in r
+
+
+def test_segunda_pasada_429_diario(monkeypatch):
+    def _post(url, payload, headers=None, timeout=60):
+        if "tools" in payload:
+            return {"message": {"role": "assistant", "content": "",
+                                "tool_calls": [{"function": {"name": "fecha",
+                                                            "arguments": {}}}]}}
+        raise WebError("HTTP 429. Detalle: GenerateRequestsPerDayPerProject")
+    monkeypatch.setattr(cerebro, "post_json", _post)
+    ejecutores = {"fecha": lambda: "Hoy es lunes 16/11/2026"}
+    r = cerebro.responder("que significa que haya nacido en 2007?",
+                          ejecutores, USUARIO)
+    assert "diario" in r and "16/11/2026" not in r
