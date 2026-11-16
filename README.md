@@ -69,6 +69,31 @@ los comandos avisan en vez de romperse):
 En Windows, si no hay voz en español instalada, Windows la descarga en
 Configuración → Hora e idioma → Voz. El micrófono necesita permiso de la app.
 
+## Fase 6 — Cerebro (LLM)
+
+Cuando ningún comando coincide, Casper le pregunta a un modelo de lenguaje,
+que puede responder con texto o llamar a uno de sus comandos como herramienta.
+Así entiende paráfrasis ("deshazte de la primera nota"), conversación
+("¿cómo estás?") y preguntas de conocimiento ("¿cuál es la fórmula de
+la velocidad?"). Si el cerebro no está disponible, Casper contesta como antes.
+
+**Opción A — Ollama (local, gratis, sin clave, recomendado):**
+
+1. Instala Ollama desde https://ollama.com
+2. Descarga el modelo: `ollama pull qwen2.5:3b`
+3. Listo: `CASPER_LLM=ollama` es el valor por defecto.
+
+**Opción B — Gemini (nube, gratis con clave):**
+
+1. Crea una clave gratis en https://aistudio.google.com/app/apikey
+2. Copia `.env.example` a `.env` y pon `CASPER_LLM=gemini` y tu
+   `GEMINI_API_KEY`.
+
+El modelo NO puede usar: apagar, reiniciar, bloquear, decir, voz, escuchar
+ni salir. Las acciones destructivas y el control de voz los inicia solo
+el humano. Las claves viven en variables de entorno o en `.env`, nunca en
+el código.
+
 ## Cómo correr las pruebas
 
 ```bash

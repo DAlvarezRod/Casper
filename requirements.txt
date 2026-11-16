@@ -9,3 +9,4 @@ sounddevice
 # audioop fue eliminado de Python 3.13+ y SpeechRecognition aun lo importa.
 # audioop-lts lo repone; el marcador lo instala solo en 3.13+.
 audioop-lts; python_version >= "3.13"
+python-dotenv

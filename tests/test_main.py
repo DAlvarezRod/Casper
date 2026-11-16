@@ -42,8 +42,10 @@ def test_process_message_prefix():
     assert main.process_message("que hora es por favor").startswith("Son las")
 
 
-def test_process_message_unknown():
+def test_process_message_unknown(monkeypatch):
     # "dime un chiste" ahora SÍ es un comando; usamos otra frase desconocida.
+    # Sin cerebro disponible, la respuesta es la de siempre.
+    monkeypatch.setattr(main, "responder_llm", lambda *a: None)
     assert main.process_message("dime un poema") == main.RESPUESTA_DESCONOCIDA
 
 
@@ -709,3 +711,65 @@ def test_dispatch_voz(monkeypatch):
     assert "activada" in main.process_message("voz on")
     main.process_message("voz off")
     assert "escucha" in main.process_message("ayuda")
+
+
+# --- Fase 6: cerebro (LLM como última etapa) ---
+
+def test_fallback_llm_texto(monkeypatch):
+    # "como estas" no es un comando: el cerebro responde conversando.
+    monkeypatch.setattr(main, "responder_llm", lambda *a: "¡Muy bien! ¿Y tú?")
+    assert main.process_message("como estas") == "¡Muy bien! ¿Y tú?"
+
+
+def test_fallback_llm_herramienta(monkeypatch, tmp_path):
+    # "deshazte de la primera nota": el cerebro llama a borrar_nota.
+    monkeypatch.chdir(tmp_path)
+    main.cmd_nota("primera")
+    main.cmd_nota("segunda")
+
+    def _cerebro(mensaje, ejecutores, usuario):
+        return ejecutores["borrar_nota"](numero=1)
+
+    monkeypatch.setattr(main, "responder_llm", _cerebro)
+    assert main.process_message("deshazte de la primera nota") == "Nota borrada: primera"
+    assert "segunda" in main.cmd_ver_notas()
+
+
+def test_fallback_llm_sin_cerebro(monkeypatch):
+    monkeypatch.setattr(main, "responder_llm", lambda *a: None)
+    assert main.process_message("como estas") == main.RESPUESTA_DESCONOCIDA
+
+
+def test_determinista_nunca_llama_al_cerebro(monkeypatch):
+    # Los comandos que sí coinciden no gastan una llamada al modelo.
+    def _cerebro(*a):
+        raise AssertionError("el cerebro no debería ser llamado")
+    monkeypatch.setattr(main, "responder_llm", _cerebro)
+    assert main.process_message("hola") == "Hola. ¿En que puedo ayudarte?"
+    assert main.process_message("dime un chiste") in main.CHISTES
+
+
+def test_ejecutores_llm(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert main.EJECUTORES_LLM["calcular"](expresion="2 + 3") == "5"
+    assert main.EJECUTORES_LLM["azar"](minimo=1, maximo=1) == "Número al azar: 1"
+    assert "guardada" in main.EJECUTORES_LLM["nota"](texto="comprar leche")
+    assert "borrada" in main.EJECUTORES_LLM["borrar_nota"](numero=1)
+    # recuerdame reconstruye la frase que cmd_recordar ya sabe parsear.
+    timers = []
+    class FakeTimer:
+        def __init__(self, s, f): timers.append(s)
+        def start(self): pass
+    monkeypatch.setattr(main.threading, "Timer", FakeTimer)
+    r = main.EJECUTORES_LLM["recuerdame"](texto="llamar", cantidad=30, unidad="minutos")
+    assert "30 minuto(s)" in r and timers and abs(timers[0] - 1800) < 5
+
+
+def test_tokens_no_fabrican_argumentos(monkeypatch, tmp_path):
+    # "deshazte de la primera nota" no debe crear una nota "deshazte 1":
+    # sin cerebro, la respuesta es "no sé", no una nota inventada.
+    monkeypatch.chdir(tmp_path)
+    main.cmd_nota("primera")
+    monkeypatch.setattr(main, "responder_llm", lambda *a: None)
+    assert main.process_message("deshazte de la primera nota") == main.RESPUESTA_DESCONOCIDA
+    assert len(main._cargar_json(main.NOTAS_PATH, [])) == 1

@@ -18,8 +18,18 @@ from urllib.parse import quote, quote_plus
 
 import psutil
 from PIL import ImageGrab
+
+try:
+    # python-dotenv carga las variables del archivo .env (claves, modelo).
+    # Si no está instalado, Casper sigue funcionando con el entorno.
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 from voz import escuchar, hablar
 from web import WebError, get_json
+from cerebro import responder as responder_llm
 
 try:
     # pyautogui necesita un entorno gráfico para importarse.
@@ -468,6 +478,7 @@ def cmd_ayuda():
         "WEB: abrir <sitio>, wikipedia <tema>, clima <ciudad>, dolar, "
         "convertir <cantidad> <moneda> a <moneda>, noticias\n"
         "VOZ: decir <texto>, escuchar, voz on|off\n"
+        "CEREBRO: si no entiendo un comando, le pregunto al modelo (Ollama local o Gemini).\n"
         "SISTEMA: estado del sistema, bateria, captura de pantalla, "
         "abrir app <nombre>, volumen <subir|bajar|silenciar>, bloquear, apagar, reiniciar, limpiar\n"
         "NOTAS: nota <texto>, ver notas, borrar nota <n>\n"
@@ -1024,8 +1035,16 @@ def process_message(message):
             # el último valor de func al llamarse (late binding).
             mejor_llamada = lambda f=func: f()
     for command in sorted(ARG_COMMANDS, key=len, reverse=True):
-        puntos = puntaje_tokens(tokens_msg, tokenizar(command))
-        if puntos > mejor and puntos[1] >= 0.6:
+        tokens_cmd = tokenizar(command)
+        puntos = puntaje_tokens(tokens_msg, tokens_cmd)
+        # Cobertura del mensaje >= 0.5, SOLO para comandos con argumento:
+        # el resto del mensaje se convierte en el argumento, así que una
+        # coincidencia parcial fabrica argumentos absurdos. Sin esta regla,
+        # "deshazte de la primera nota" creaba una nota llamada "deshazte 1".
+        # En comandos sin argumento el riesgo no existe: lo peor que pasa
+        # es responder una pregunta relacionada ("dime qué hora es" -> hora).
+        cobertura = len(set(tokens_msg) & set(tokens_cmd)) / len(tokens_msg) if tokens_msg else 0
+        if puntos > mejor and puntos[1] >= 0.6 and cobertura >= 0.5:
             usados = set(tokenizar(command))
             resto = [t for t in tokens_msg if t not in usados]
             mejor = puntos
@@ -1038,7 +1057,54 @@ def process_message(message):
     parecido = fuzzy_match(message, COMMANDS.keys())
     if parecido is not None:
         return COMMANDS[parecido]()
+    # 6. Cerebro (Fase 6): si nada coincidió, le preguntamos al modelo.
+    # Responde conversación y conocimiento, o llama a una herramienta.
+    # Si no hay cerebro disponible, devolvemos la respuesta de siempre.
+    try:
+        respuesta = responder_llm(message, EJECUTORES_LLM, USUARIO)
+    except Exception:
+        respuesta = None
+    if respuesta is not None:
+        return respuesta
     return RESPUESTA_DESCONOCIDA
+
+
+# --- Fase 6: el cerebro conoce a su usuario y a sus herramientas ---
+
+USUARIO = {
+    "nombre": "David Esteban Álvarez Rodriguez",
+    "descripcion": "estudiante de Ingeniería de Sistemas en la Universidad Javeriana (Bogotá)",
+}
+
+# Nombre de herramienta -> función que la ejecuta. Los adaptadores (lambda)
+# traducen los argumentos estructurados del modelo a lo que cada comando
+# ya espera: el cerebro no toca los comandos, solo los llama.
+EJECUTORES_LLM = {
+    "hora": lambda: cmd_hora(),
+    "fecha": lambda: cmd_fecha(),
+    "estado": lambda: cmd_estado(),
+    "bateria": lambda: cmd_bateria(),
+    "chiste": lambda: cmd_chiste(),
+    "resumen": lambda: cmd_resumen(),
+    "ver_notas": lambda: cmd_ver_notas(),
+    "ver_tareas": lambda: cmd_ver_tareas(),
+    "ver_recordatorios": lambda: cmd_ver_recordatorios(),
+    "abrir": lambda sitio: cmd_abrir(sitio),
+    "abrir_app": lambda nombre: cmd_abrir_app(nombre),
+    "volumen": lambda nivel: cmd_volumen(nivel),
+    "calcular": lambda expresion: cmd_calcular(expresion),
+    "azar": lambda minimo, maximo: cmd_azar(f"{minimo} {maximo}"),
+    "nota": lambda texto: cmd_nota(texto),
+    "borrar_nota": lambda numero: cmd_borrar_nota(str(numero)),
+    "tarea": lambda texto: cmd_tarea(texto),
+    "completar_tarea": lambda numero: cmd_completar_tarea(str(numero)),
+    "temporizador": lambda minutos: cmd_temporizador(str(minutos)),
+    "wikipedia": lambda tema: cmd_wikipedia(tema),
+    "recuerdame": lambda texto, cantidad, unidad: cmd_recordar(f"{texto} en {cantidad} {unidad}"),
+    "cancelar_recordatorio": lambda numero: cmd_cancelar_recordatorio(str(numero)),
+    "clima": lambda ciudad: cmd_clima(ciudad),
+    "convertir": lambda cantidad, origen, destino: cmd_convertir(f"{cantidad} {origen} a {destino}"),
+}
 
 
 def main():
