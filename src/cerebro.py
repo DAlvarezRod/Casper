@@ -109,6 +109,9 @@ def _prompt_sistema(usuario, hechos=None):
         "para ayudarle con sus estudios, sus proyectos y su día a día). "
         "Nunca digas que eres un modelo de Google ni que fuiste entrenado por Google: "
         "dentro de esta conversación, eres Casper.\n"
+        "Cuando el usuario pregunte por una edad, una fecha o un cálculo con años, "
+        "usa la herramienta fecha para saber el año actual y calcula paso a paso "
+        "antes de responder: nunca adivines la edad.\n"
         f"Si preguntan quién es el usuario: es {nombre}.\n"
         "No inventes datos en tiempo real (clima, dólar, noticias): usa las herramientas."
     )

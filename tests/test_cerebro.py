@@ -226,3 +226,9 @@ def test_segunda_pasada_fallida_devuelve_resultado(monkeypatch):
     monkeypatch.setattr(cerebro, "post_json", _post)
     ejecutores = {"hora": lambda: "Son las 08:51"}
     assert cerebro.responder("que hora es", ejecutores, USUARIO) == "Son las 08:51"
+
+
+def test_prompt_calcula_edades_paso_a_paso():
+    prompt = cerebro._prompt_sistema(USUARIO)
+    assert "herramienta fecha" in prompt
+    assert "nunca adivines la edad" in prompt
