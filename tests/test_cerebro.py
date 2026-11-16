@@ -142,3 +142,38 @@ def test_responder_sin_debug_no_imprime(monkeypatch, capsys):
     monkeypatch.setattr(cerebro, "post_json", _post)
     assert cerebro.responder("hola", {}, USUARIO) is None
     assert capsys.readouterr().err == ""
+
+
+def test_responder_incluye_hechos_y_historial(monkeypatch):
+    vistos = {}
+
+    def _post(url, payload, headers=None, timeout=60):
+        vistos["payload"] = payload
+        return {"message": {"role": "assistant", "content": "ok", "tool_calls": []}}
+    monkeypatch.setattr(cerebro, "post_json", _post)
+    contexto = {"historial": [("usuario", "nací en 2007"), ("casper", "Entendido.")],
+                "hechos": ["nací en 2007"]}
+    assert cerebro.responder("cuantos años tengo", {}, USUARIO, contexto) == "ok"
+    mensajes = vistos["payload"]["messages"]
+    assert "nací en 2007" in mensajes[0]["content"]  # sistema: hechos
+    assert mensajes[1] == {"role": "user", "content": "nací en 2007"}
+    assert mensajes[2] == {"role": "assistant", "content": "Entendido."}
+    assert mensajes[3] == {"role": "user", "content": "cuantos años tengo"}
+
+
+def test_gemini_historial_alterna_roles(monkeypatch):
+    monkeypatch.setenv("CASPER_LLM", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "clave-falsa")
+    vistos = {}
+
+    def _post(url, payload, headers=None, timeout=60):
+        vistos["payload"] = payload
+        return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
+    monkeypatch.setattr(cerebro, "post_json", _post)
+    contexto = {"historial": [("usuario", "a"), ("casper", "b"), ("usuario", "c")],
+                "hechos": []}
+    cerebro.responder("d", {}, USUARIO, contexto)
+    roles = [c["role"] for c in vistos["payload"]["contents"]]
+    # Dos turnos de usuario seguidos (c y d) se fusionan: Gemini los rechaza.
+    assert roles == ["user", "model", "user"]
+    assert vistos["payload"]["contents"][2]["parts"][0]["text"] == "c\nd"

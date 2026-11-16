@@ -93,9 +93,9 @@ DEFINICIONES_HERRAMIENTAS = [
 ]
 
 
-def _prompt_sistema(usuario):
+def _prompt_sistema(usuario, hechos=None):
     nombre = usuario.get("nombre", "el usuario")
-    return (
+    prompt = (
         f"Eres Casper, el asistente personal de {nombre}, "
         "estudiante de Ingeniería de Sistemas en la Universidad Javeriana (Bogotá). "
         "Hablas español, eres directo y breve.\n"
@@ -107,6 +107,27 @@ def _prompt_sistema(usuario):
         f"Si preguntan quién es el usuario: es {nombre}.\n"
         "No inventes datos en tiempo real (clima, dólar, noticias): usa las herramientas."
     )
+    if hechos:
+        # Los hechos son memoria duradera: lo que el usuario te pidió recordar.
+        # Van en el prompt porque el modelo no tiene acceso a la base de datos.
+        lineas = "\n".join(f"- {h}" for h in hechos)
+        prompt += f"\nLo que sabes de {nombre} (lo que te pidió recordar):\n{lineas}"
+    return prompt
+
+
+def _mensajes(mensaje, usuario, contexto):
+    # Sistema + historial (si hay) + mensaje actual. El historial es lo que
+    # le da al modelo memoria de la conversación: sin él, cada pregunta
+    # llega sola y "nací en 2007" se olvida en el siguiente turno.
+    contexto = contexto or {}
+    hechos = contexto.get("hechos") or []
+    historial = contexto.get("historial") or []
+    mensajes = [{"role": "system", "content": _prompt_sistema(usuario, hechos)}]
+    for rol, texto in historial:
+        mensajes.append({"role": "user" if rol == "usuario" else "assistant",
+                         "content": texto})
+    mensajes.append({"role": "user", "content": mensaje})
+    return mensajes
 
 
 def _a_ollama(d):
@@ -139,16 +160,13 @@ def _a_gemini(d):
             "parameters": _a_mayusculas(d["parametros"])}
 
 
-def _preguntar_ollama(mensaje, usuario):
+def _preguntar_ollama(mensaje, usuario, contexto=None):
     # Devuelve (texto, llamada) donde llamada es {"nombre", "argumentos"} o None.
     url = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/") + "/api/chat"
     modelo = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
     datos = post_json(url, {
         "model": modelo,
-        "messages": [
-            {"role": "system", "content": _prompt_sistema(usuario)},
-            {"role": "user", "content": mensaje},
-        ],
+        "messages": _mensajes(mensaje, usuario, contexto),
         "tools": [_a_ollama(d) for d in DEFINICIONES_HERRAMIENTAS],
         "stream": False,
     }, timeout=120)
@@ -160,16 +178,31 @@ def _preguntar_ollama(mensaje, usuario):
     return msg.get("content") or None, None
 
 
-def _preguntar_gemini(mensaje, usuario):
+def _preguntar_gemini(mensaje, usuario, contexto=None):
     clave = os.environ.get("GEMINI_API_KEY")
     if not clave:
         raise WebError("Falta GEMINI_API_KEY.")
     modelo = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}"
            f":generateContent?key={clave}")
+    # Gemini no acepta "system" dentro de contents: el sistema va aparte
+    # y los turnos usan "user"/"model", siempre alternados.
+    mensajes = _mensajes(mensaje, usuario, contexto)
+    sistema = next((m["content"] for m in mensajes if m["role"] == "system"), "")
+    contents = []
+    for m in mensajes:
+        if m["role"] == "system":
+            continue
+        rol = "user" if m["role"] == "user" else "model"
+        if contents and contents[-1]["role"] == rol:
+            # Dos turnos seguidos del mismo rol: Gemini los rechaza,
+            # así que se fusionan en uno solo.
+            contents[-1]["parts"][0]["text"] += "\n" + m["content"]
+        else:
+            contents.append({"role": rol, "parts": [{"text": m["content"]}]})
     datos = post_json(url, {
-        "system_instruction": {"parts": [{"text": _prompt_sistema(usuario)}]},
-        "contents": [{"role": "user", "parts": [{"text": mensaje}]}],
+        "system_instruction": {"parts": [{"text": sistema}]},
+        "contents": contents,
         "tools": [{"functionDeclarations": [_a_gemini(d) for d in DEFINICIONES_HERRAMIENTAS]}],
     }, timeout=60)
     candidatos = datos.get("candidates") or []
@@ -184,15 +217,16 @@ def _preguntar_gemini(mensaje, usuario):
     return "".join(textos) or None, None
 
 
-def responder(mensaje, ejecutores, usuario):
+def responder(mensaje, ejecutores, usuario, contexto=None):
     # Pregunta al modelo y, si pide una herramienta, la ejecuta.
     # Devuelve el texto final, o None si el cerebro no está disponible.
+    # contexto: {"historial": [(rol, texto)...], "hechos": [texto...]}.
     proveedor = os.environ.get("CASPER_LLM", "ollama").lower()
     try:
         if proveedor == "gemini":
-            texto, llamada = _preguntar_gemini(mensaje, usuario)
+            texto, llamada = _preguntar_gemini(mensaje, usuario, contexto)
         else:
-            texto, llamada = _preguntar_ollama(mensaje, usuario)
+            texto, llamada = _preguntar_ollama(mensaje, usuario, contexto)
     except WebError as e:
         # Con CASPER_DEBUG=1 el error se ve en la consola: sin eso, un fallo
         # del cerebro es indistinguible de un "no sé" y no se puede depurar.

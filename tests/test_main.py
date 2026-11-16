@@ -727,7 +727,7 @@ def test_fallback_llm_herramienta(monkeypatch, tmp_path):
     main.cmd_nota("primera")
     main.cmd_nota("segunda")
 
-    def _cerebro(mensaje, ejecutores, usuario):
+    def _cerebro(mensaje, ejecutores, usuario, contexto=None):
         return ejecutores["borrar_nota"](numero=1)
 
     monkeypatch.setattr(main, "responder_llm", _cerebro)
@@ -808,3 +808,66 @@ def test_di_no_devuelve_la_fecha(monkeypatch):
     monkeypatch.setattr(main, "responder_llm", lambda *a: None)
     r = main.process_message("di solo millos locas")
     assert not r.startswith("Hoy es")
+
+
+# --- Fase 7: memoria ---
+
+def test_cmd_recuerda_hecho(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main.memoria, "DB_PATH", str(tmp_path / "casper.db"))
+    # main() normaliza antes de procesar, así que el hecho se guarda sin
+    # tildes ("naci") — el cerebro lo entiende igual.
+    r = main.process_message(main.normalize_text("recuerda que nací en 2007"))
+    assert r == "Lo recordaré: naci en 2007"
+    assert "naci en 2007" in main.process_message("que sabes de mi")
+    assert "Uso" in main.process_message("recuerda llamarme en 10 minutos")
+    assert "Olvidado" in main.process_message("olvida 1")
+    assert "No me has pedido" in main.process_message("que sabes de mi")
+
+
+def test_recuerdame_sigue_funcionando(monkeypatch, tmp_path):
+    # "recuerda" como memoria no debe romper los recordatorios.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main.memoria, "DB_PATH", str(tmp_path / "casper.db"))
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, s, f):
+            timers.append(s)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(main.threading, "Timer", FakeTimer)
+    assert "30 minuto(s)" in main.process_message("recuerdame llamar en 30 minutos")
+
+
+def test_memoria_en_el_cerebro(monkeypatch, tmp_path):
+    # El caso que falló: "nací en 2007" -> "cuantos años tengo".
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main.memoria, "DB_PATH", str(tmp_path / "casper.db"))
+    vistos = {}
+
+    def _cerebro(mensaje, ejecutores, usuario, contexto=None):
+        vistos["contexto"] = contexto
+        if "2007" in str(contexto.get("historial")):
+            return "Tienes 19 años."
+        return "No lo sé."
+
+    monkeypatch.setattr(main, "responder_llm", _cerebro)
+    main.memoria.guardar_turno("usuario", "nací en 2007")
+    main.memoria.guardar_turno("casper", "Entendido.")
+    assert main.process_message("cuantos años tengo") == "Tienes 19 años."
+    assert vistos["contexto"]["historial"][0] == ("usuario", "nací en 2007")
+
+
+def test_main_guarda_turnos(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main.memoria, "DB_PATH", str(tmp_path / "casper.db"))
+    monkeypatch.setattr(main, "responder_llm", lambda *a: None)
+    entradas = iter(["hola", "salir"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(entradas))
+    main.main()
+    h = main.memoria.obtener_historial(10)
+    assert ("usuario", "hola") in h
+    assert ("casper", "Hola. ¿En que puedo ayudarte?") in h

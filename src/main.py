@@ -30,6 +30,7 @@ except Exception:
 from voz import escuchar, hablar
 from web import WebError, get_json
 from cerebro import responder as responder_llm
+import memoria
 
 try:
     # pyautogui necesita un entorno gráfico para importarse.
@@ -120,7 +121,6 @@ SINONIMOS = {
     "muestra": "ver", "muestrame": "ver", "ensename": "ver",
     "anota": "nota", "anotar": "nota", "apunta": "nota",
     "chistes": "chiste", "notas": "nota", "tareas": "tarea", "capturas": "captura",
-    "recuerda": "recuerdame",
     "escucha": "escuchar",
 }
 
@@ -481,6 +481,7 @@ def cmd_ayuda():
         "convertir <cantidad> <moneda> a <moneda>, noticias\n"
         "VOZ: decir <texto>, escuchar, voz on|off\n"
         "CEREBRO: si no entiendo un comando, le pregunto al modelo (Ollama local o Gemini).\n"
+        "MEMORIA: recuerda que <hecho>, que sabes de mi, olvida <n>\n"
         "SISTEMA: estado del sistema, bateria, captura de pantalla, "
         "abrir app <nombre>, volumen <subir|bajar|silenciar>, bloquear, apagar, reiniciar, limpiar\n"
         "NOTAS: nota <texto>, ver notas, borrar nota <n>\n"
@@ -904,6 +905,37 @@ def cmd_abrir(sitio):
 # En Python las funciones son objetos como cualquier otro y se pueden
 # guardar en un diccionario. A eso se le llama "funciones de primera clase".
 # Varias claves pueden apuntar a la misma funcion (son alias del comando).
+# --- Fase 7: memoria (hechos duraderos + historial de conversación) ---
+
+def cmd_recuerda_hecho(args):
+    # "recuerda que nací en 2007" -> guarda "nací en 2007" como hecho.
+    # El "que" es parte del comando, no del hecho.
+    if not args.startswith("que "):
+        return "Uso: recuerda que <hecho>. Ejemplo: recuerda que nací en 2007"
+    texto = args[4:].strip()
+    if not texto:
+        return "Uso: recuerda que <hecho>. Ejemplo: recuerda que nací en 2007"
+    memoria.guardar_hecho(texto)
+    return f"Lo recordaré: {texto}"
+
+
+def cmd_que_sabes():
+    hechos = memoria.listar_hechos()
+    if not hechos:
+        return "No me has pedido que recuerde nada todavía. Prueba: recuerda que nací en 2007"
+    lineas = [f"{i + 1}. {texto}" for i, (_, texto) in enumerate(hechos)]
+    return "Esto es lo que sé de ti:\n" + "\n".join(lineas)
+
+
+def cmd_olvida(numero):
+    numero = NUMEROS.get(numero.strip(), numero.strip())
+    texto = memoria.borrar_hecho(numero)
+    if texto is None:
+        return "Uso: olvida <número>. Mira lo que sé con 'que sabes de mi'."
+    return f"Olvidado: {texto}"
+
+
+
 COMMANDS = {
     "hola": cmd_hola,
     "quien eres": cmd_quien_eres,
@@ -942,6 +974,7 @@ COMMANDS = {
     "ver recordatorios": cmd_ver_recordatorios,
     "ver notas": cmd_ver_notas,
     "ver tareas": cmd_ver_tareas,
+    "que sabes de mi": cmd_que_sabes,
     "dolar": cmd_dolar,
     "precio del dolar": cmd_dolar,
     "noticias": cmd_noticias,
@@ -969,6 +1002,8 @@ ARG_COMMANDS = {
     "convertir": cmd_convertir,
     "decir": cmd_decir,
     "voz": cmd_voz,
+    "recuerda": cmd_recuerda_hecho,
+    "olvida": cmd_olvida,
     "recuerdame": cmd_recordar,
     "recordar": cmd_recordar,
     "cancelar recordatorio": cmd_cancelar_recordatorio,
@@ -1065,9 +1100,15 @@ def process_message(message):
         return COMMANDS[parecido]()
     # 6. Cerebro (Fase 6): si nada coincidió, le preguntamos al modelo.
     # Responde conversación y conocimiento, o llama a una herramienta.
-    # Si no hay cerebro disponible, devolvemos la respuesta de siempre.
+    # Le pasamos su memoria (Fase 7): los últimos turnos y los hechos
+    # que el usuario le pidió recordar. Si no hay cerebro disponible,
+    # devolvemos la respuesta de siempre.
     try:
-        respuesta = responder_llm(message, EJECUTORES_LLM, USUARIO)
+        contexto = {
+            "historial": memoria.obtener_historial(8),
+            "hechos": [texto for _, texto in memoria.listar_hechos()],
+        }
+        respuesta = responder_llm(message, EJECUTORES_LLM, USUARIO, contexto)
     except Exception:
         respuesta = None
     if respuesta is not None:
@@ -1131,6 +1172,11 @@ def main():
         # Las respuestas vacías (como la de "limpiar") no se imprimen.
         if response:
             print("Casper:", response)
+            # Memoria (Fase 7): cada turno queda guardado. El cerebro
+            # lee los últimos para entender la conversación, y los hechos
+            # duraderos viven en la misma base de datos.
+            memoria.guardar_turno("usuario", user_input)
+            memoria.guardar_turno("casper", response)
             # Con la voz activada, Casper también HABLA la respuesta,
             # en un hilo aparte para no bloquear el teclado.
             if _voz_activa["on"]:

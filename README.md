@@ -94,6 +94,22 @@ ni salir. Las acciones destructivas y el control de voz los inicia solo
 el humano. Las claves viven en variables de entorno o en `.env`, nunca en
 el código.
 
+## Fase 7 — Memoria
+
+Casper recuerda en dos niveles, ambos en SQLite (`casper.db`, ignorado por Git):
+
+- **Historial:** cada turno de la conversación queda guardado. El cerebro
+  recibe los últimos 8, así que "nací en 2007" sirve para responder
+  "¿cuántos años tengo?" en el turno siguiente. Se poda a 100 turnos.
+- **Hechos:** lo que TÚ le pides que recuerde, y solo eso:
+  `recuerda que nací en 2007`, `recuerda que prefiero respuestas cortas`.
+  El cerebro los ve en cada mensaje, incluso después de reiniciar.
+  `que sabes de mi` los lista, `olvida <n>` borra uno.
+
+Nada se guarda solo: Casper no adivina qué es importante ni extrae datos
+de la conversación sin que se lo pidas. La memoria duradera es una
+decisión del usuario, no un efecto secundario.
+
 ## Cómo correr las pruebas
 
 ```bash
