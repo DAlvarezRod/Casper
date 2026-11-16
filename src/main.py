@@ -137,9 +137,11 @@ def tokenizar(message):
         palabra = NUMEROS.get(palabra, palabra)
         if palabra in SINONIMOS:
             palabra = SINONIMOS[palabra]
-        elif palabra not in _vocabulario():
+        elif len(palabra) >= 3 and palabra not in _vocabulario():
             # Typo por palabra: "elmina" -> "elimina". Solo si es muy
-            # parecido (>=0.8); si no, se deja como está.
+            # parecido (>=0.8) y la palabra tiene 3+ letras: con 1-2 letras
+            # ("di" -> "dia") casi cualquier cosa coincide y se inventan
+            # comandos que el usuario no pidió.
             corregida = fuzzy_match(palabra, _vocabulario())
             if corregida is not None:
                 palabra = SINONIMOS.get(corregida, corregida)
@@ -1014,7 +1016,11 @@ def process_message(message):
         return func(arg)
     # 3. Prefijo con límite de palabra: "que dia es hoy" empieza con
     # "que dia es ". El espacio importa: antes "simple" disparaba "si".
+    # Los comandos sensibles ("si"/"no") SOLO coinciden exactos (etapa 1):
+    # "no se aun" no es un "no", y "si claro" jamás debe confirmar un apagado.
     for command, func in COMMANDS.items():
+        if command in COMANDOS_SENSIBLES:
+            continue
         if message == command or message.startswith(command + " "):
             return func()
     # 4. Tokens: el orden y las muletillas dejan de importar.

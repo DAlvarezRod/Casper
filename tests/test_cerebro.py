@@ -109,3 +109,36 @@ def test_gemini_sin_clave_devuelve_none(monkeypatch):
     monkeypatch.setenv("CASPER_LLM", "gemini")
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     assert cerebro.responder("hola", {}, USUARIO) is None
+
+
+def test_prompt_permite_crear_texto():
+    assert "poema" in cerebro._prompt_sistema(USUARIO)
+    assert "dominio público" in cerebro._prompt_sistema(USUARIO)
+
+
+def test_responder_429_mensaje_claro(monkeypatch):
+    def _post(*a, **k):
+        raise WebError("El servicio devolvió un error (HTTP 429).")
+    monkeypatch.setattr(cerebro, "post_json", _post)
+    r = cerebro.responder("hola", {}, USUARIO)
+    assert "demasiadas preguntas" in r and "Espera un minuto" in r
+
+
+def test_responder_debug_imprime_error(monkeypatch, capsys):
+    monkeypatch.setenv("CASPER_DEBUG", "1")
+
+    def _post(*a, **k):
+        raise WebError("sin conexión")
+    monkeypatch.setattr(cerebro, "post_json", _post)
+    assert cerebro.responder("hola", {}, USUARIO) is None
+    assert "[cerebro] sin conexión" in capsys.readouterr().err
+
+
+def test_responder_sin_debug_no_imprime(monkeypatch, capsys):
+    monkeypatch.delenv("CASPER_DEBUG", raising=False)
+
+    def _post(*a, **k):
+        raise WebError("sin conexión")
+    monkeypatch.setattr(cerebro, "post_json", _post)
+    assert cerebro.responder("hola", {}, USUARIO) is None
+    assert capsys.readouterr().err == ""

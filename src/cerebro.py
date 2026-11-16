@@ -12,6 +12,7 @@
 # responder() devuelve None y Casper contesta con lo que ya sabía.
 # Un cerebro caído jamás debe romper al asistente.
 import os
+import sys
 
 from web import WebError, post_json
 
@@ -100,6 +101,9 @@ def _prompt_sistema(usuario):
         "Hablas español, eres directo y breve.\n"
         "Tienes herramientas para hacer cosas: úsalas cuando el usuario pida una acción concreta. "
         "Si no hay herramienta adecuada, responde tú mismo con lo que sabes.\n"
+        "Puedes conversar, explicar, escribir y crear texto libremente: poemas, historias, "
+        "chistes, explicaciones. Si te piden un poema, escríbelo tú mismo; si es de un autor "
+        "clásico como Shakespeare, puedes citarlo: sus obras son de dominio público.\n"
         f"Si preguntan quién es el usuario: es {nombre}.\n"
         "No inventes datos en tiempo real (clima, dólar, noticias): usa las herramientas."
     )
@@ -189,15 +193,28 @@ def responder(mensaje, ejecutores, usuario):
             texto, llamada = _preguntar_gemini(mensaje, usuario)
         else:
             texto, llamada = _preguntar_ollama(mensaje, usuario)
-    except WebError:
+    except WebError as e:
+        # Con CASPER_DEBUG=1 el error se ve en la consola: sin eso, un fallo
+        # del cerebro es indistinguible de un "no sé" y no se puede depurar.
+        if os.environ.get("CASPER_DEBUG"):
+            print(f"[cerebro] {e}", file=sys.stderr)
+        if "429" in str(e):
+            # Límite de la API gratuita: no es un "no sé", es un "espera".
+            return ("Estoy recibiendo demasiadas preguntas seguidas "
+                    "(límite de la API gratuita). Espera un minuto e inténtalo de nuevo.")
         return None
     if llamada is not None:
         funcion = ejecutores.get(llamada["nombre"])
         if funcion is None:
+            if os.environ.get("CASPER_DEBUG"):
+                print(f"[cerebro] herramienta desconocida: {llamada['nombre']}", file=sys.stderr)
             return None
         try:
             return funcion(**llamada["argumentos"])
         except TypeError:
             # El modelo inventó un argumento que la función no acepta.
+            if os.environ.get("CASPER_DEBUG"):
+                print(f"[cerebro] argumentos inválidos para {llamada['nombre']}: "
+                      f"{llamada['argumentos']}", file=sys.stderr)
             return None
     return texto or None

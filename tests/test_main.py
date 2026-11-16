@@ -773,3 +773,38 @@ def test_tokens_no_fabrican_argumentos(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "responder_llm", lambda *a: None)
     assert main.process_message("deshazte de la primera nota") == main.RESPUESTA_DESCONOCIDA
     assert len(main._cargar_json(main.NOTAS_PATH, [])) == 1
+
+
+# --- Correcciones tras la prueba con Gemini (Nov 15) ---
+
+def test_si_no_solo_coinciden_exactos(monkeypatch):
+    # "no se aun" no es un "no": antes cancelaba por prefijo.
+    monkeypatch.setattr(main, "responder_llm", lambda *a: None)
+    assert main.process_message("no se aun") == main.RESPUESTA_DESCONOCIDA
+    assert main.process_message("si claro") == main.RESPUESTA_DESCONOCIDA
+    # Exactos siguen funcionando.
+    assert main.process_message("si") == "No hay nada que confirmar."
+    assert main.process_message("no") == "Cancelado."
+
+
+def test_si_claro_no_confirma_apagado(monkeypatch):
+    main.pedir_confirmacion("apagar el equipo", lambda: "APAGANDO")
+    monkeypatch.setattr(main, "responder_llm", lambda *a: None)
+    # "si claro" NO debe confirmar: solo "si" exacto confirma.
+    assert main.process_message("si claro") == main.RESPUESTA_DESCONOCIDA
+    assert main.process_message("si") == "APAGANDO"
+
+
+def test_correccion_typo_solo_palabras_largas():
+    # "di" (2 letras) no debe corregirse a "dia": antes "di SOLO MILLOS
+    # LOCAS" respondía con la fecha.
+    assert "dia" not in main.tokenizar("di solo millos locas")
+    # Las largas sí se corrigen.
+    assert "elimina" in main.tokenizar("porfavor elmina la segunda nota") or \
+        "borrar" in main.tokenizar("porfavor elmina la segunda nota")
+
+
+def test_di_no_devuelve_la_fecha(monkeypatch):
+    monkeypatch.setattr(main, "responder_llm", lambda *a: None)
+    r = main.process_message("di solo millos locas")
+    assert not r.startswith("Hoy es")
