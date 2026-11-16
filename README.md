@@ -94,6 +94,14 @@ ni salir. Las acciones destructivas y el control de voz los inicia solo
 el humano. Las claves viven en variables de entorno o en `.env`, nunca en
 el código.
 
+**Segunda pasada:** cuando el modelo llama a una herramienta, Casper
+ejecuta y le devuelve el resultado para que componga la respuesta final
+(la herramienta informa, el modelo razona). Sin esto, "nací en 2007, eso
+significa que tengo cuántos años?" devolvía la fecha cruda porque el
+modelo había llamado a `fecha` para calcular la edad. Si la segunda
+llamada falla, se devuelve el resultado crudo. El prompt también fija la
+identidad: Casper es Casper, creado por David — nunca un modelo de Google.
+
 ## Fase 7 — Memoria
 
 Casper recuerda en dos niveles, ambos en SQLite (`casper.db`, ignorado por Git):

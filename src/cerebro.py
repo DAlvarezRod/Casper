@@ -104,6 +104,11 @@ def _prompt_sistema(usuario, hechos=None):
         "Puedes conversar, explicar, escribir y crear texto libremente: poemas, historias, "
         "chistes, explicaciones. Si te piden un poema, escríbelo tú mismo; si es de un autor "
         "clásico como Shakespeare, puedes citarlo: sus obras son de dominio público.\n"
+        f"Si preguntan quién eres, quién te creó o para qué existes: eres Casper, "
+        f"el asistente personal de {nombre}, creado por él (un proyecto estilo Jarvis, "
+        "para ayudarle con sus estudios, sus proyectos y su día a día). "
+        "Nunca digas que eres un modelo de Google ni que fuiste entrenado por Google: "
+        "dentro de esta conversación, eres Casper.\n"
         f"Si preguntan quién es el usuario: es {nombre}.\n"
         "No inventes datos en tiempo real (clima, dólar, noticias): usa las herramientas."
     )
@@ -160,16 +165,23 @@ def _a_gemini(d):
             "parameters": _a_mayusculas(d["parametros"])}
 
 
-def _preguntar_ollama(mensaje, usuario, contexto=None):
+def _preguntar_ollama(mensaje, usuario, contexto=None, texto_directo=None):
     # Devuelve (texto, llamada) donde llamada es {"nombre", "argumentos"} o None.
+    # texto_directo: segunda pasada (tras una herramienta). Sin historial ni
+    # herramientas: solo el sistema y ese mensaje, para que el modelo
+    # responda en texto usando el resultado de la herramienta.
     url = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/") + "/api/chat"
     modelo = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
-    datos = post_json(url, {
-        "model": modelo,
-        "messages": _mensajes(mensaje, usuario, contexto),
-        "tools": [_a_ollama(d) for d in DEFINICIONES_HERRAMIENTAS],
-        "stream": False,
-    }, timeout=120)
+    if texto_directo is not None:
+        mensajes = [{"role": "system", "content": _prompt_sistema(usuario)},
+                    {"role": "user", "content": texto_directo}]
+        cuerpo = {"model": modelo, "messages": mensajes, "stream": False}
+    else:
+        cuerpo = {"model": modelo,
+                  "messages": _mensajes(mensaje, usuario, contexto),
+                  "tools": [_a_ollama(d) for d in DEFINICIONES_HERRAMIENTAS],
+                  "stream": False}
+    datos = post_json(url, cuerpo, timeout=120)
     msg = datos.get("message") or {}
     llamadas = msg.get("tool_calls") or []
     if llamadas:
@@ -178,7 +190,7 @@ def _preguntar_ollama(mensaje, usuario, contexto=None):
     return msg.get("content") or None, None
 
 
-def _preguntar_gemini(mensaje, usuario, contexto=None):
+def _preguntar_gemini(mensaje, usuario, contexto=None, texto_directo=None):
     clave = os.environ.get("GEMINI_API_KEY")
     if not clave:
         raise WebError("Falta GEMINI_API_KEY.")
@@ -187,7 +199,11 @@ def _preguntar_gemini(mensaje, usuario, contexto=None):
            f":generateContent?key={clave}")
     # Gemini no acepta "system" dentro de contents: el sistema va aparte
     # y los turnos usan "user"/"model", siempre alternados.
-    mensajes = _mensajes(mensaje, usuario, contexto)
+    if texto_directo is not None:
+        mensajes = [{"role": "system", "content": _prompt_sistema(usuario)},
+                    {"role": "user", "content": texto_directo}]
+    else:
+        mensajes = _mensajes(mensaje, usuario, contexto)
     sistema = next((m["content"] for m in mensajes if m["role"] == "system"), "")
     contents = []
     for m in mensajes:
@@ -200,11 +216,14 @@ def _preguntar_gemini(mensaje, usuario, contexto=None):
             contents[-1]["parts"][0]["text"] += "\n" + m["content"]
         else:
             contents.append({"role": rol, "parts": [{"text": m["content"]}]})
-    datos = post_json(url, {
+    cuerpo = {
         "system_instruction": {"parts": [{"text": sistema}]},
         "contents": contents,
-        "tools": [{"functionDeclarations": [_a_gemini(d) for d in DEFINICIONES_HERRAMIENTAS]}],
-    }, timeout=60)
+    }
+    if texto_directo is None:
+        cuerpo["tools"] = [{"functionDeclarations":
+                            [_a_gemini(d) for d in DEFINICIONES_HERRAMIENTAS]}]
+    datos = post_json(url, cuerpo, timeout=60)
     candidatos = datos.get("candidates") or []
     if not candidatos:
         return None, None
@@ -244,11 +263,30 @@ def responder(mensaje, ejecutores, usuario, contexto=None):
                 print(f"[cerebro] herramienta desconocida: {llamada['nombre']}", file=sys.stderr)
             return None
         try:
-            return funcion(**llamada["argumentos"])
+            resultado = funcion(**llamada["argumentos"])
         except TypeError:
             # El modelo inventó un argumento que la función no acepta.
             if os.environ.get("CASPER_DEBUG"):
                 print(f"[cerebro] argumentos inválidos para {llamada['nombre']}: "
                       f"{llamada['argumentos']}", file=sys.stderr)
             return None
+        # Segunda pasada: antes el resultado crudo de la herramienta era la
+        # respuesta final ("Hoy es lunes 16/11/2026" cuando el usuario
+        # preguntaba su edad). Ahora el modelo recibe el resultado y
+        # compone la respuesta: la herramienta informa, el modelo razona.
+        # Si la segunda llamada falla, el resultado crudo es mejor que nada.
+        texto_directo = (
+            f"El usuario preguntó: «{mensaje}». Pediste la herramienta "
+            f"«{llamada['nombre']}» y devolvió: «{resultado}». "
+            "Responde al usuario usando esa información, en español y de forma breve.")
+        try:
+            if proveedor == "gemini":
+                texto2, _ = _preguntar_gemini(mensaje, usuario, contexto, texto_directo)
+            else:
+                texto2, _ = _preguntar_ollama(mensaje, usuario, contexto, texto_directo)
+        except WebError as e:
+            if os.environ.get("CASPER_DEBUG"):
+                print(f"[cerebro] segunda pasada: {e}", file=sys.stderr)
+            return resultado
+        return texto2 or resultado
     return texto or None

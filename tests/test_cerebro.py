@@ -88,12 +88,19 @@ def test_gemini_llama_herramienta(monkeypatch):
     def _post(url, payload, headers=None, timeout=60):
         assert "generativelanguage.googleapis.com" in url
         assert "key=clave-falsa" in url
-        assert payload["tools"][0]["functionDeclarations"]
+        if "tools" in payload:
+            # Primera llamada: el modelo pide el clima.
+            assert payload["tools"][0]["functionDeclarations"]
+            return {"candidates": [{"content": {"parts": [
+                {"functionCall": {"name": "clima", "args": {"ciudad": "Bogotá"}}}]}}]}
+        # Segunda pasada: sin herramientas, el modelo responde en texto.
+        assert "clima de Bogotá" in payload["contents"][0]["parts"][0]["text"]
         return {"candidates": [{"content": {"parts": [
-            {"functionCall": {"name": "clima", "args": {"ciudad": "Bogotá"}}}]}}]}
+            {"text": "En Bogotá hace 16°C y está nublado."}]}}]}
     monkeypatch.setattr(cerebro, "post_json", _post)
     ejecutores = {"clima": lambda ciudad: f"clima de {ciudad}"}
-    assert cerebro.responder("qué clima hace en Bogotá", ejecutores, USUARIO) == "clima de Bogotá"
+    assert cerebro.responder("qué clima hace en Bogotá", ejecutores, USUARIO) == \
+        "En Bogotá hace 16°C y está nublado."
 
 
 def test_gemini_responde_texto(monkeypatch):
@@ -177,3 +184,45 @@ def test_gemini_historial_alterna_roles(monkeypatch):
     # Dos turnos de usuario seguidos (c y d) se fusionan: Gemini los rechaza.
     assert roles == ["user", "model", "user"]
     assert vistos["payload"]["contents"][2]["parts"][0]["text"] == "c\nd"
+
+
+def test_prompt_identidad_casper():
+    prompt = cerebro._prompt_sistema(USUARIO)
+    assert "creado por él" in prompt
+    assert "Nunca digas que eres un modelo de Google" in prompt
+
+
+def test_segunda_pasada_usa_resultado(monkeypatch):
+    # El caso real: el modelo llama a fecha para calcular la edad y la
+    # respuesta final debe ser la edad, no la fecha cruda.
+    llamadas = []
+
+    def _post(url, payload, headers=None, timeout=60):
+        llamadas.append(payload)
+        if len(llamadas) == 1:
+            return {"message": {"role": "assistant", "content": "",
+                                "tool_calls": [{"function": {"name": "fecha",
+                                                            "arguments": {}}}]}}
+        return {"message": {"role": "assistant",
+                            "content": "Tienes 19 años: naciste en 2007 y hoy es 2026.",
+                            "tool_calls": []}}
+    monkeypatch.setattr(cerebro, "post_json", _post)
+    ejecutores = {"fecha": lambda: "Hoy es lunes 16/11/2026"}
+    r = cerebro.responder("naci en 2007, eso significa que tengo cuantos anos?",
+                          ejecutores, USUARIO)
+    assert r == "Tienes 19 años: naciste en 2007 y hoy es 2026."
+    # La segunda llamada lleva el resultado de la herramienta y no ofrece herramientas.
+    assert "Hoy es lunes 16/11/2026" in llamadas[1]["messages"][1]["content"]
+    assert "tools" not in llamadas[1]
+
+
+def test_segunda_pasada_fallida_devuelve_resultado(monkeypatch):
+    def _post(url, payload, headers=None, timeout=60):
+        if "tools" in payload:
+            return {"message": {"role": "assistant", "content": "",
+                                "tool_calls": [{"function": {"name": "hora",
+                                                            "arguments": {}}}]}}
+        raise WebError("sin conexión")
+    monkeypatch.setattr(cerebro, "post_json", _post)
+    ejecutores = {"hora": lambda: "Son las 08:51"}
+    assert cerebro.responder("que hora es", ejecutores, USUARIO) == "Son las 08:51"
