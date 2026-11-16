@@ -232,3 +232,20 @@ def test_prompt_calcula_edades_paso_a_paso():
     prompt = cerebro._prompt_sistema(USUARIO)
     assert "herramienta fecha" in prompt
     assert "nunca adivines la edad" in prompt
+
+
+def test_segunda_pasada_429_no_devuelve_resultado_crudo(monkeypatch):
+    # Si la segunda pasada choca con el límite, Casper debe decirlo en
+    # vez de devolver la fecha cruda como si fuera la respuesta.
+    def _post(url, payload, headers=None, timeout=60):
+        if "tools" in payload:
+            return {"message": {"role": "assistant", "content": "",
+                                "tool_calls": [{"function": {"name": "fecha",
+                                                            "arguments": {}}}]}}
+        raise WebError("El servicio devolvió un error (HTTP 429).")
+    monkeypatch.setattr(cerebro, "post_json", _post)
+    ejecutores = {"fecha": lambda: "Hoy es lunes 16/11/2026"}
+    r = cerebro.responder("que significa que haya nacido en 2007?",
+                          ejecutores, USUARIO)
+    assert "demasiadas preguntas" in r
+    assert "16/11/2026" not in r

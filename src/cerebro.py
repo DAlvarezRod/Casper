@@ -277,7 +277,9 @@ def responder(mensaje, ejecutores, usuario, contexto=None):
         # respuesta final ("Hoy es lunes 16/11/2026" cuando el usuario
         # preguntaba su edad). Ahora el modelo recibe el resultado y
         # compone la respuesta: la herramienta informa, el modelo razona.
-        # Si la segunda llamada falla, el resultado crudo es mejor que nada.
+        # Si la segunda llamada falla, el resultado crudo es mejor que nada,
+        # EXCEPTO si es un 429: ahí el resultado crudo engaña (la fecha no
+        # es la respuesta) y hay que decir que espere.
         texto_directo = (
             f"El usuario preguntó: «{mensaje}». Pediste la herramienta "
             f"«{llamada['nombre']}» y devolvió: «{resultado}». "
@@ -290,6 +292,9 @@ def responder(mensaje, ejecutores, usuario, contexto=None):
         except WebError as e:
             if os.environ.get("CASPER_DEBUG"):
                 print(f"[cerebro] segunda pasada: {e}", file=sys.stderr)
+            if "429" in str(e):
+                return ("Estoy recibiendo demasiadas preguntas seguidas "
+                        "(límite de la API gratuita). Espera un minuto e inténtalo de nuevo.")
             return resultado
         return texto2 or resultado
     return texto or None
