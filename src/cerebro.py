@@ -160,7 +160,7 @@ def _preguntar_gemini(mensaje, usuario):
     clave = os.environ.get("GEMINI_API_KEY")
     if not clave:
         raise WebError("Falta GEMINI_API_KEY.")
-    modelo = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    modelo = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}"
            f":generateContent?key={clave}")
     datos = post_json(url, {
